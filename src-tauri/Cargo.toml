@@ -1,0 +1,80 @@
+[package]
+name = "wincatalog"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "wincatalog_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "wincatalog"
+path = "src/main.rs"
+
+[dependencies]
+# Tauri
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+
+# Database
+rusqlite = { version = "0.31", features = ["bundled", "backup"] }
+
+# Async / threading
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+tokio = { version = "1", features = ["full"] }
+
+# Filesystem
+walkdir = "2"
+
+# Filesystem watching (Watch mode)
+notify = { version = "6", default-features = false, features = ["macos_fsevent"] }
+
+# Hashing
+blake3 = "1"
+
+# Image processing
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
+
+# Audio metadata
+id3 = "1"
+metaflac = "0.2"
+
+# Image EXIF metadata
+kamadak-exif = "0.5"
+
+# Archive handling (for Office/EPUB thumbnail extraction)
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# MIME detection
+mime_guess = "2"
+
+# Platform directories
+dirs-next = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+thiserror = "1"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = 3

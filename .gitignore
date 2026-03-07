@@ -1,0 +1,41 @@
+# Node
+node_modules/
+dist/
+.vite/
+
+# Rust / Cargo
+src-tauri/target/
+
+# Tauri
+src-tauri/gen/
+
+# Build artifacts
+*.ico.bak
+
+# App data / DB
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Claude Code
+.claude/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Generated icon source (temp)
+app-icon.png
