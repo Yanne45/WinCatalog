@@ -36,9 +36,9 @@ pub type AiResult<T> = Result<T, AiError>;
 
 #[derive(Debug, Clone)]
 pub struct AiConfig {
-    pub provider: String,       // "anthropic", "openai"
+    pub provider: String, // "anthropic", "openai", "mistral"
     pub api_key: String,
-    pub model: String,          // "claude-sonnet-4-5-20250514", "gpt-4o-mini"
+    pub model: String, // "claude-sonnet-4-5-20250514", "gpt-4o-mini", "mistral-small-latest"
     pub auto_classify: bool,
     pub auto_ocr_pdf: bool,
 }
@@ -49,19 +49,30 @@ impl AiConfig {
             db.read(|conn| {
                 conn.prepare_cached("SELECT value FROM settings WHERE key=?1")?
                     .query_row(params![key], |r| r.get(0))
-                    .optional().map_err(crate::db::DbError::Sqlite)
-            }).ok().flatten()
+                    .optional()
+                    .map_err(crate::db::DbError::Sqlite)
+            })
+            .ok()
+            .flatten()
         };
 
-        let api_key = get("ai.api_key").ok_or_else(|| AiError::NotConfigured("ai.api_key".into()))?;
+        let api_key =
+            get("ai.api_key").ok_or_else(|| AiError::NotConfigured("ai.api_key".into()))?;
         if api_key.is_empty() {
             return Err(AiError::NotConfigured("API key is empty".into()));
         }
 
+        let provider = get("ai.provider").unwrap_or_else(|| "anthropic".into());
+        let default_model = match provider.as_str() {
+            "mistral" => "mistral-small-latest",
+            "openai" => "gpt-4o-mini",
+            _ => "claude-sonnet-4-5-20250514",
+        };
+
         Ok(Self {
-            provider: get("ai.provider").unwrap_or_else(|| "anthropic".into()),
+            model: get("ai.model").unwrap_or_else(|| default_model.into()),
+            provider,
             api_key,
-            model: get("ai.model").unwrap_or_else(|| "claude-sonnet-4-5-20250514".into()),
             auto_classify: get("ai.auto_classify").map(|v| v == "1").unwrap_or(true),
             auto_ocr_pdf: get("ai.auto_ocr_pdf").map(|v| v == "1").unwrap_or(true),
         })
@@ -76,7 +87,12 @@ use rusqlite::OptionalExtension;
 
 /// Extract text from a document file and store in entry_text.
 /// Supports PDF (pdftotext), DOCX (simple ZIP text extraction).
-pub fn extract_text(db: &Database, entry_id: i64, path: &Path, ext: &str) -> AiResult<Option<String>> {
+pub fn extract_text(
+    db: &Database,
+    entry_id: i64,
+    path: &Path,
+    ext: &str,
+) -> AiResult<Option<String>> {
     let text = match ext {
         "pdf" => extract_pdf_text(path)?,
         "txt" | "md" | "csv" | "json" | "xml" | "html" | "log" => {
@@ -110,7 +126,11 @@ fn extract_pdf_text(path: &Path) -> AiResult<Option<String>> {
     match output {
         Ok(o) if o.status.success() => {
             let text = String::from_utf8_lossy(&o.stdout).to_string();
-            if text.trim().is_empty() { Ok(None) } else { Ok(Some(text)) }
+            if text.trim().is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(text))
+            }
         }
         _ => Ok(None),
     }
@@ -129,7 +149,10 @@ pub struct ClassifyResult {
 
 /// Classify a document by its text content. Stores results in ai_annotations.
 pub fn classify_document(
-    db: &Database, config: &AiConfig, entry_id: i64, text: &str,
+    db: &Database,
+    config: &AiConfig,
+    entry_id: i64,
+    text: &str,
 ) -> AiResult<ClassifyResult> {
     // Truncate text to first ~2000 chars for classification (char-boundary safe)
     let truncated = if text.len() > 2000 {
@@ -181,19 +204,27 @@ pub fn classify_document(
 // ============================================================================
 
 pub fn summarize_document(
-    db: &Database, config: &AiConfig, entry_id: i64, text: &str,
+    db: &Database,
+    config: &AiConfig,
+    entry_id: i64,
+    text: &str,
 ) -> AiResult<String> {
     // Use first ~4000 chars + last ~1000 chars for summary (char-boundary safe)
     let input = if text.len() > 5000 {
         let head_end = text.floor_char_boundary(4000);
         let tail_start = text.ceil_char_boundary(text.len().saturating_sub(1000));
-        format!("{}...\n\n[...]\n\n{}", &text[..head_end], &text[tail_start..])
+        format!(
+            "{}...\n\n[...]\n\n{}",
+            &text[..head_end],
+            &text[tail_start..]
+        )
     } else {
         text.to_string()
     };
 
     let prompt = format!(
-        "Résume ce document en 3-5 phrases en français. Sois concis et factuel.\n\nDocument:\n{}", input
+        "Résume ce document en 3-5 phrases en français. Sois concis et factuel.\n\nDocument:\n{}",
+        input
     );
 
     let summary = call_ai_api(config, &prompt)?;
@@ -218,7 +249,10 @@ pub fn summarize_document(
 // ============================================================================
 
 pub fn ocr_document(
-    db: &Database, config: &AiConfig, entry_id: i64, path: &Path,
+    db: &Database,
+    config: &AiConfig,
+    entry_id: i64,
+    path: &Path,
 ) -> AiResult<String> {
     // Read image/PDF first page as base64
     // For MVP: use pdftotext first; if empty, it's a scanned PDF → send to AI
@@ -248,7 +282,10 @@ pub fn ocr_document(
 // ============================================================================
 
 pub fn analyze_image(
-    db: &Database, config: &AiConfig, entry_id: i64, _path: &Path,
+    db: &Database,
+    config: &AiConfig,
+    entry_id: i64,
+    _path: &Path,
 ) -> AiResult<Vec<String>> {
     let prompt = "Describe this image with 3-8 short labels in French (e.g. 'plage', 'montagne', 'personnes'). Respond ONLY with JSON array of strings.";
 
@@ -275,11 +312,51 @@ pub fn analyze_image(
 }
 
 // ============================================================================
-// Generic AI API call (HTTP client stub)
+// Retry helper
 // ============================================================================
 
-/// Call the AI API via reqwest (blocking).
-/// Supports Anthropic (Claude) and OpenAI-compatible endpoints.
+/// Retry `f` up to 3 times with exponential backoff (1s, 2s) on transient errors.
+/// Transient = network error, or HTTP 429 / 5xx.
+fn with_retry<F>(mut f: F) -> AiResult<String>
+where
+    F: FnMut() -> AiResult<String>,
+{
+    let mut last_err: Option<AiError> = None;
+    for attempt in 0u32..3 {
+        match f() {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                let retryable = is_retryable(&e);
+                last_err = Some(e);
+                if retryable && attempt < 2 {
+                    std::thread::sleep(std::time::Duration::from_secs(1 << attempt));
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    Err(last_err.unwrap())
+}
+
+fn is_retryable(err: &AiError) -> bool {
+    match err {
+        AiError::Api(msg) => {
+            msg.contains("429")
+                || msg.contains("500")
+                || msg.contains("502")
+                || msg.contains("503")
+                || msg.contains("504")
+        }
+        _ => false,
+    }
+}
+
+// ============================================================================
+// Generic AI API call
+// ============================================================================
+
+/// Dispatch to the right provider with retry on transient errors.
 fn call_ai_api(config: &AiConfig, prompt: &str) -> AiResult<String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
@@ -287,14 +364,21 @@ fn call_ai_api(config: &AiConfig, prompt: &str) -> AiResult<String> {
         .map_err(|e| AiError::Api(format!("HTTP client: {}", e)))?;
 
     match config.provider.as_str() {
-        "anthropic" => call_anthropic(&client, config, prompt),
-        "openai" => call_openai(&client, config, prompt),
+        "anthropic" => with_retry(|| call_anthropic(&client, config, prompt)),
+        "openai" => with_retry(|| call_openai(&client, config, prompt)),
+        "mistral" => with_retry(|| call_mistral(&client, config, prompt)),
         other => Err(AiError::Api(format!("Unknown AI provider: {}", other))),
     }
 }
 
+// ============================================================================
+// Provider implementations
+// ============================================================================
+
 fn call_anthropic(
-    client: &reqwest::blocking::Client, config: &AiConfig, prompt: &str,
+    client: &reqwest::blocking::Client,
+    config: &AiConfig,
+    prompt: &str,
 ) -> AiResult<String> {
     let body = serde_json::json!({
         "model": config.model,
@@ -317,10 +401,10 @@ fn call_anthropic(
         return Err(AiError::Api(format!("Anthropic {} : {}", status, text)));
     }
 
-    let json: serde_json::Value = resp.json()
+    let json: serde_json::Value = resp
+        .json()
         .map_err(|e| AiError::Parse(format!("Anthropic response: {}", e)))?;
 
-    // Extract text from content[0].text
     json.get("content")
         .and_then(|c| c.as_array())
         .and_then(|arr| arr.first())
@@ -330,8 +414,13 @@ fn call_anthropic(
         .ok_or_else(|| AiError::Parse("No text in Anthropic response".into()))
 }
 
-fn call_openai(
-    client: &reqwest::blocking::Client, config: &AiConfig, prompt: &str,
+/// OpenAI-compatible endpoint (also used by Mistral via `base_url`).
+fn call_openai_compat(
+    client: &reqwest::blocking::Client,
+    config: &AiConfig,
+    prompt: &str,
+    base_url: &str,
+    provider_label: &str,
 ) -> AiResult<String> {
     let body = serde_json::json!({
         "model": config.model,
@@ -340,23 +429,23 @@ fn call_openai(
     });
 
     let resp = client
-        .post("https://api.openai.com/v1/chat/completions")
+        .post(base_url)
         .header("Authorization", format!("Bearer {}", config.api_key))
         .header("content-type", "application/json")
         .json(&body)
         .send()
-        .map_err(|e| AiError::Api(format!("OpenAI request: {}", e)))?;
+        .map_err(|e| AiError::Api(format!("{} request: {}", provider_label, e)))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().unwrap_or_default();
-        return Err(AiError::Api(format!("OpenAI {} : {}", status, text)));
+        return Err(AiError::Api(format!("{} {} : {}", provider_label, status, text)));
     }
 
-    let json: serde_json::Value = resp.json()
-        .map_err(|e| AiError::Parse(format!("OpenAI response: {}", e)))?;
+    let json: serde_json::Value = resp
+        .json()
+        .map_err(|e| AiError::Parse(format!("{} response: {}", provider_label, e)))?;
 
-    // Extract content from choices[0].message.content
     json.get("choices")
         .and_then(|c| c.as_array())
         .and_then(|arr| arr.first())
@@ -364,9 +453,40 @@ fn call_openai(
         .and_then(|msg| msg.get("content"))
         .and_then(|t| t.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| AiError::Parse("No content in OpenAI response".into()))
+        .ok_or_else(|| AiError::Parse(format!("No content in {} response", provider_label)))
+}
+
+fn call_openai(
+    client: &reqwest::blocking::Client,
+    config: &AiConfig,
+    prompt: &str,
+) -> AiResult<String> {
+    call_openai_compat(
+        client,
+        config,
+        prompt,
+        "https://api.openai.com/v1/chat/completions",
+        "OpenAI",
+    )
+}
+
+fn call_mistral(
+    client: &reqwest::blocking::Client,
+    config: &AiConfig,
+    prompt: &str,
+) -> AiResult<String> {
+    call_openai_compat(
+        client,
+        config,
+        prompt,
+        "https://api.mistral.ai/v1/chat/completions",
+        "Mistral",
+    )
 }
 
 fn ts() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }

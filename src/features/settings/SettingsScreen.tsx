@@ -9,12 +9,14 @@ import {
   NumberInput, TextInput, Button, Divider, Badge, Alert, ActionIcon,
   useMantineColorScheme,
 } from '@mantine/core';
+import { notifications } from '@mantine/notifications';
+import { modals } from '@mantine/modals';
 import {
   IconSettings, IconSun, IconRefresh, IconDatabase, IconTrash,
   IconHash, IconFolder, IconAlertTriangle, IconCheck, IconBrain,
   IconForms, IconPlus, IconX,
 } from '@tabler/icons-react';
-import { settingsApi, diagnosticsApi, trashApi, formatBytes, type PragmaDiagnostics } from '../../api/tauri';
+import { settingsApi, diagnosticsApi, maintenanceApi, trashApi, formatBytes, type PragmaDiagnostics } from '../../api/tauri';
 import { invoke } from '@tauri-apps/api/core';
 
 // ============================================================================
@@ -180,6 +182,27 @@ function ScanTab() {
 
 function CacheTab() {
   const [maxCacheMb, setMaxCacheMb] = useSettingNumber('cache.max_size_mb', 500);
+  const [clearing, setClearing] = useState(false);
+
+  const handleClearCache = useCallback(() => {
+    modals.openConfirmModal({
+      title: 'Vider le cache de miniatures',
+      children: <Text size="sm">Les miniatures seront recalculées à la demande.</Text>,
+      labels: { confirm: 'Vider', cancel: 'Annuler' },
+      confirmProps: { color: 'yellow' },
+      onConfirm: async () => {
+        setClearing(true);
+        try {
+          const freed = await maintenanceApi.clearThumbCache();
+          notifications.show({ title: 'Cache vidé', message: `${formatBytes(freed)} libérés.`, color: 'green' });
+        } catch (err) {
+          notifications.show({ title: 'Erreur', message: String(err), color: 'red' });
+        } finally {
+          setClearing(false);
+        }
+      },
+    });
+  }, []);
 
   return (
     <Stack gap="md">
@@ -204,7 +227,12 @@ function CacheTab() {
 
           <Divider color="var(--mantine-color-default-border)" />
 
-          <Button variant="light" size="xs" color="yellow" leftSection={<IconTrash size={14} />}>
+          <Button
+            variant="light" size="xs" color="yellow"
+            leftSection={<IconTrash size={14} />}
+            onClick={handleClearCache}
+            loading={clearing}
+          >
             Vider le cache
           </Button>
         </Stack>
@@ -332,9 +360,54 @@ function TrashTab() {
 
 function AdvancedTab() {
   const [diagnostics, setDiagnostics] = useState<PragmaDiagnostics | null>(null);
+  const [optimizing, setOptimizing] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     diagnosticsApi.getDb().then(setDiagnostics).catch(console.error);
+  }, []);
+
+  const handleOptimize = useCallback(async () => {
+    setOptimizing(true);
+    try {
+      await maintenanceApi.optimizeDb();
+      const diag = await diagnosticsApi.getDb();
+      setDiagnostics(diag);
+      notifications.show({ title: 'Base de données optimisée', message: 'WAL checkpoint et index mis à jour.', color: 'green' });
+    } catch (err) {
+      notifications.show({ title: 'Erreur', message: String(err), color: 'red' });
+    } finally {
+      setOptimizing(false);
+    }
+  }, []);
+
+  const handleReset = useCallback(() => {
+    modals.openConfirmModal({
+      title: 'Réinitialiser l\'index',
+      children: (
+        <Text size="sm">
+          Toutes les entrées seront supprimées. Les volumes et paramètres sont conservés.
+          Cette action est irréversible.
+        </Text>
+      ),
+      labels: { confirm: 'Réinitialiser', cancel: 'Annuler' },
+      confirmProps: { color: 'red' },
+      onConfirm: async () => {
+        setResetting(true);
+        try {
+          const deleted = await maintenanceApi.resetIndex();
+          notifications.show({
+            title: 'Index réinitialisé',
+            message: `${deleted} entrée${deleted !== 1 ? 's' : ''} supprimée${deleted !== 1 ? 's' : ''}. Relancez un scan pour reconstruire l'index.`,
+            color: 'orange',
+          });
+        } catch (err) {
+          notifications.show({ title: 'Erreur', message: String(err), color: 'red' });
+        } finally {
+          setResetting(false);
+        }
+      },
+    });
   }, []);
 
   return (
@@ -385,10 +458,20 @@ function AdvancedTab() {
           </Alert>
 
           <Group gap="sm">
-            <Button variant="light" size="xs" color="yellow" leftSection={<IconRefresh size={14} />}>
+            <Button
+              variant="light" size="xs" color="yellow"
+              leftSection={<IconRefresh size={14} />}
+              onClick={handleOptimize}
+              loading={optimizing}
+            >
               Optimiser la DB
             </Button>
-            <Button variant="light" size="xs" color="red" leftSection={<IconDatabase size={14} />}>
+            <Button
+              variant="light" size="xs" color="red"
+              leftSection={<IconDatabase size={14} />}
+              onClick={handleReset}
+              loading={resetting}
+            >
               Réinitialiser l'index
             </Button>
           </Group>
@@ -402,12 +485,27 @@ function AdvancedTab() {
 // Tab: IA
 // ============================================================================
 
+const AI_PROVIDER_DEFAULTS: Record<string, { model: string; placeholder: string }> = {
+  anthropic: { model: 'claude-sonnet-4-5-20250514', placeholder: 'claude-sonnet-4-5-20250514' },
+  openai:    { model: 'gpt-4o-mini',                placeholder: 'gpt-4o-mini / gpt-4o' },
+  mistral:   { model: 'mistral-small-latest',       placeholder: 'mistral-small-latest / mistral-large-latest' },
+};
+
 function AiTab() {
   const [provider, setProvider] = useSetting('ai.provider', 'anthropic');
   const [apiKey, setApiKey] = useSetting('ai.api_key', '');
   const [model, setModel] = useSetting('ai.model', 'claude-sonnet-4-5-20250514');
   const [autoClassify, setAutoClassify] = useSettingBool('ai.auto_classify', true);
   const [autoOcr, setAutoOcr] = useSettingBool('ai.auto_ocr_pdf', true);
+
+  const handleProviderChange = (v: string | null) => {
+    if (!v) return;
+    setProvider(v);
+    const defaults = AI_PROVIDER_DEFAULTS[v];
+    if (defaults) setModel(defaults.model);
+  };
+
+  const modelPlaceholder = AI_PROVIDER_DEFAULTS[provider]?.placeholder ?? '';
 
   return (
     <Stack gap="md">
@@ -419,10 +517,11 @@ function AiTab() {
               <Text size="xs" c="dimmed">Service cloud pour l'IA</Text>
             </div>
             <Select size="xs" w={180} value={provider}
-              onChange={(v) => { if (v) setProvider(v); }}
+              onChange={handleProviderChange}
               data={[
                 { value: 'anthropic', label: 'Anthropic (Claude)' },
                 { value: 'openai', label: 'OpenAI (GPT)' },
+                { value: 'mistral', label: 'Mistral AI' },
               ]} />
           </Group>
           <Group justify="space-between">
@@ -438,7 +537,7 @@ function AiTab() {
               <Text size="sm">Modèle</Text>
               <Text size="xs" c="dimmed">Modèle utilisé pour les appels</Text>
             </div>
-            <TextInput size="xs" w={280} value={model}
+            <TextInput size="xs" w={280} placeholder={modelPlaceholder} value={model}
               onChange={(e) => setModel(e.currentTarget.value)} />
           </Group>
         </Stack>
