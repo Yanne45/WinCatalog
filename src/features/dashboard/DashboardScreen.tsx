@@ -3,7 +3,7 @@
 // Dashboard with real data from dashboardApi
 // ============================================================================
 
-import { useState, useEffect, useCallback, memo } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, memo } from 'react';
 import {
   Box, Group, Stack, Text, Paper, Badge, Button, SimpleGrid,
   RingProgress, Skeleton, ActionIcon, Menu, Tooltip,
@@ -12,22 +12,30 @@ import {
   IconRefresh, IconPlus, IconDots, IconFolder, IconDisc,
   IconCircleFilled, IconPlayerPlay, IconTrash, IconClock,
 } from '@tabler/icons-react';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as ReTooltip, BarChart, Bar, XAxis, YAxis } from 'recharts';
 import {
   volumeApi, dashboardApi, trashApi, formatBytes, formatDate,
   type Volume, type KindStat, type ScanLogEntry, type FolderStat,
 } from '../../api/tauri';
-import { FILE_KIND_COLORS } from '../../app/theme';
 
-// ============================================================================
-// Kind name mapping
-// ============================================================================
+const KindDistributionWidget = lazy(() => import('./widgets/KindDistributionWidget'));
+const TopFoldersWidget = lazy(() => import('./widgets/TopFoldersWidget'));
 
-const KIND_LABELS: Record<string, string> = {
-  image: 'Images', video: 'Vidéos', audio: 'Audio', document: 'Documents',
-  archive: 'Archives', ebook: 'Ebooks', text: 'Texte', font: 'Polices',
-  dir: 'Dossiers', other: 'Autre',
+const DASHBOARD_CACHE_TTL_MS = 45_000;
+const DASHBOARD_ANALYTICS_TTL_MS = 120_000;
+
+type DashboardCache = {
+  updatedAt: number;
+  analyticsUpdatedAt: number;
+  volumes: Volume[];
+  kindStats: KindStat[];
+  recentLog: ScanLogEntry[];
+  topFolders: FolderStat[];
+  topFoldersVolumeId: number | null;
+  trashCount: number;
+  trashSize: number;
 };
+
+let dashboardCache: DashboardCache | null = null;
 
 // ============================================================================
 // Volume Card
@@ -98,85 +106,6 @@ const VolumeCard = memo(function VolumeCard({
           Dernier scan : {new Date(volume.last_scan_at * 1000).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })}
         </Text>
       )}
-    </Paper>
-  );
-});
-
-// ============================================================================
-// Kind Distribution (REAL data)
-// ============================================================================
-
-const KindDistribution = memo(function KindDistribution({ stats }: { stats: KindStat[] }) {
-  if (stats.length === 0) return null;
-
-  const totalBytes = stats.reduce((s, k) => s + k.bytes, 0);
-  const data = stats.map((s) => ({
-    name: KIND_LABELS[s.kind] ?? s.kind,
-    kind: s.kind,
-    value: totalBytes > 0 ? Math.round((s.bytes / totalBytes) * 100) : 0,
-    bytes: s.bytes,
-    count: s.count,
-  }));
-
-  return (
-    <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
-      <Text fw={600} size="sm" mb="md">Répartition par type</Text>
-      <Group align="center" gap="lg">
-        <ResponsiveContainer width={140} height={140}>
-          <PieChart>
-            <Pie data={data} dataKey="value" cx="50%" cy="50%" innerRadius={35} outerRadius={60} paddingAngle={2}>
-              {data.map((d) => (
-                <Cell key={d.kind} fill={(FILE_KIND_COLORS as any)[d.kind]?.color ?? '#64748b'} />
-              ))}
-            </Pie>
-            <ReTooltip
-              contentStyle={{ backgroundColor: 'var(--mantine-color-body)', border: '1px solid var(--mantine-color-default-border)', borderRadius: 6, fontSize: 12 }}
-              formatter={(value: number, _: any, entry: any) => [`${value}% (${formatBytes(entry.payload.bytes)})`, entry.payload.name]}
-            />
-          </PieChart>
-        </ResponsiveContainer>
-        <Stack gap={4}>
-          {data.slice(0, 8).map((d) => (
-            <Group key={d.kind} gap={8}>
-              <Box w={10} h={10} style={{ borderRadius: 2, backgroundColor: (FILE_KIND_COLORS as any)[d.kind]?.color ?? '#64748b' }} />
-              <Text size="xs" c="dimmed" w={80}>{d.name}</Text>
-              <Text size="xs" fw={500} w={35} ta="right">{d.value}%</Text>
-              <Text size="xs" c="dimmed">{d.count.toLocaleString()}</Text>
-            </Group>
-          ))}
-        </Stack>
-      </Group>
-    </Paper>
-  );
-});
-
-// ============================================================================
-// Top Folders (REAL data)
-// ============================================================================
-
-const TopFolders = memo(function TopFolders({ folders }: { folders: FolderStat[] }) {
-  if (folders.length === 0) return null;
-
-  const chartData = folders.slice(0, 10).map((f) => ({
-    name: f.name.length > 18 ? f.name.slice(0, 16) + '…' : f.name,
-    bytes: f.bytes_total,
-    files: f.files_total,
-  }));
-
-  return (
-    <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
-      <Text fw={600} size="sm" mb="md">Top dossiers</Text>
-      <ResponsiveContainer width="100%" height={200}>
-        <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 10 }}>
-          <XAxis type="number" hide />
-          <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 11, fill: 'var(--mantine-color-dimmed)' }} />
-          <ReTooltip
-            contentStyle={{ backgroundColor: 'var(--mantine-color-body)', border: '1px solid var(--mantine-color-default-border)', borderRadius: 6, fontSize: 12 }}
-            formatter={(value: number) => [formatBytes(value), 'Taille']}
-          />
-          <Bar dataKey="bytes" fill="var(--mantine-color-primary-6)" radius={[0, 4, 4, 0]} />
-        </BarChart>
-      </ResponsiveContainer>
     </Paper>
   );
 });
@@ -293,35 +222,85 @@ export default function DashboardScreen({
   const [trashSize, setTrashSize] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  const loadAll = useCallback(async () => {
+  const applyDashboardData = useCallback((data: DashboardCache) => {
+    setVolumes(data.volumes);
+    setKindStats(data.kindStats);
+    setRecentLog(data.recentLog);
+    setTopFolders(data.topFolders);
+    setTrashCount(data.trashCount);
+    setTrashSize(data.trashSize);
+  }, []);
+
+  const loadAll = useCallback(async (mode: 'auto' | 'light' | 'full' = 'auto') => {
+    const now = Date.now();
+    const hasCache = dashboardCache != null;
+    const cacheAge = dashboardCache ? (now - dashboardCache.updatedAt) : Number.POSITIVE_INFINITY;
+    const cacheIsFresh = cacheAge < DASHBOARD_CACHE_TTL_MS;
+
+    if (mode === 'auto' && cacheIsFresh && dashboardCache) {
+      applyDashboardData(dashboardCache);
+      setLoading(false);
+      return;
+    }
+
     try {
-      setLoading(true);
-      const [vols, kinds, log, [tc, ts]] = await Promise.all([
+      if (!hasCache) {
+        setLoading(true);
+      }
+
+      const [vols, log, [tc, ts]] = await Promise.all([
         volumeApi.list(),
-        dashboardApi.globalKindStats(),
         dashboardApi.recentScanLog(undefined, undefined, 15),
         trashApi.summary(),
       ]);
-      setVolumes(vols);
-      setKindStats(kinds);
-      setRecentLog(log);
-      setTrashCount(tc);
-      setTrashSize(ts);
 
-      // Load top folders for the first online volume
-      const firstOnline = vols.find((v) => v.is_online);
-      if (firstOnline) {
-        const folders = await dashboardApi.topFolders(firstOnline.id, firstOnline.root_path, 10);
-        setTopFolders(folders);
-      }
+      const firstOnline = vols.find((v) => v.is_online) ?? null;
+      const topFoldersVolumeId = firstOnline?.id ?? null;
+
+      const needTopFolders =
+        mode === 'full'
+        || !dashboardCache
+        || dashboardCache.topFoldersVolumeId !== topFoldersVolumeId
+        || (now - dashboardCache.updatedAt) >= DASHBOARD_CACHE_TTL_MS;
+
+      const needAnalytics =
+        mode === 'full'
+        || !dashboardCache
+        || (now - dashboardCache.analyticsUpdatedAt) >= DASHBOARD_ANALYTICS_TTL_MS;
+
+      const topFoldersPromise = needTopFolders
+        ? (firstOnline
+          ? dashboardApi.topFolders(firstOnline.id, firstOnline.root_path, 10)
+          : Promise.resolve([] as FolderStat[]))
+        : Promise.resolve(dashboardCache?.topFolders ?? []);
+
+      const kindStatsPromise = needAnalytics
+        ? dashboardApi.globalKindStats()
+        : Promise.resolve(dashboardCache?.kindStats ?? []);
+
+      const [folders, kinds] = await Promise.all([topFoldersPromise, kindStatsPromise]);
+
+      const nextCache: DashboardCache = {
+        updatedAt: now,
+        analyticsUpdatedAt: needAnalytics ? now : (dashboardCache?.analyticsUpdatedAt ?? now),
+        volumes: vols,
+        kindStats: kinds,
+        recentLog: log,
+        topFolders: folders,
+        topFoldersVolumeId,
+        trashCount: tc,
+        trashSize: ts,
+      };
+      dashboardCache = nextCache;
+      applyDashboardData(nextCache);
     } catch (err) {
       console.error('Dashboard load failed:', err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyDashboardData]);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { loadAll('auto'); }, [loadAll]);
 
   const handleScan = useCallback((volumeId: number, mode: 'full' | 'quick') => {
     onNavigate('scan', { volumeId, mode });
@@ -360,7 +339,7 @@ export default function DashboardScreen({
       <Group justify="space-between" mb="lg">
         <Text size="lg" fw={700}>Disques</Text>
         <Group gap="sm">
-          <Button variant="subtle" size="xs" leftSection={<IconRefresh size={14} />} onClick={loadAll}>Actualiser</Button>
+          <Button variant="subtle" size="xs" leftSection={<IconRefresh size={14} />} onClick={() => loadAll('light')}>Actualiser</Button>
           <Button size="xs" leftSection={<IconPlus size={14} />} onClick={() => onNavigate('scan')}>Scanner</Button>
         </Group>
       </Group>
@@ -378,8 +357,8 @@ export default function DashboardScreen({
 
       {/* Widgets row */}
       <SimpleGrid cols={{ base: 1, lg: 2 }} mb="lg">
-        <KindDistribution stats={kindStats} />
-        <TopFolders folders={topFolders} />
+        <Suspense fallback={<Skeleton height={220} />}><KindDistributionWidget stats={kindStats} /></Suspense>
+        <Suspense fallback={<Skeleton height={220} />}><TopFoldersWidget folders={topFolders} /></Suspense>
       </SimpleGrid>
 
       {/* Recent activity */}

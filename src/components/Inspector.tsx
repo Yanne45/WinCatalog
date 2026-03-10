@@ -14,9 +14,11 @@ import {
   IconCopy, IconCheck, IconExternalLink,
 } from '@tabler/icons-react';
 import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import {
-  entryApi, tagApi, formatBytes, formatDate,
+  entryApi, tagApi, metaApi, formatBytes, formatDate,
   type Entry, type EntrySlim, type FileKind,
+  type MetaImage, type MetaAudio, type MetaVideo, type MetaDocument, type AiAnnotationRow,
 } from '../api/tauri';
 import { FILE_KIND_COLORS } from '../app/theme';
 import AudioWaveform from './Inspector/AudioWaveform';
@@ -24,33 +26,10 @@ import GpsMiniMap from './Inspector/GpsMiniMap';
 import ImageHistogram from './Inspector/ImageHistogram';
 
 // ============================================================================
-// Types for metadata
+// Local aliases (typed meta comes from tauri.ts via metaApi)
 // ============================================================================
 
-interface ImageMeta {
-  width?: number; height?: number; camera_make?: string; camera_model?: string;
-  iso?: number; focal_length?: number; aperture?: number; shutter_speed?: string;
-  gps_lat?: number; gps_lon?: number; taken_at?: number;
-}
-
-interface AudioMeta {
-  duration_ms?: number; artist?: string; album?: string; title?: string;
-  track_number?: number; genre?: string; year?: number; bitrate?: number;
-  sample_rate?: number; channels?: number;
-}
-
-interface VideoMeta {
-  duration_ms?: number; width?: number; height?: number; fps?: number;
-  video_codec?: string; audio_codec?: string; bitrate?: number; container?: string;
-}
-
-interface DocumentMeta {
-  format?: string; page_count?: number; title?: string; author?: string;
-}
-
-interface AiAnnotation {
-  kind: string; value: string; confidence?: number; source: string;
-}
+// Use imported MetaImage, MetaAudio, MetaVideo, MetaDocument, AiAnnotationRow from tauri.ts
 
 interface CustomFieldValue {
   field_id: number; field_name: string; field_type: string; value: string | null;
@@ -79,25 +58,7 @@ export interface InspectorProps {
 // Metadata loaders
 // ============================================================================
 
-async function loadFullEntry(id: number): Promise<Entry | null> {
-  return entryApi.get(id);
-}
 
-async function loadMeta<T>(table: string, entryId: number): Promise<T | null> {
-  try {
-    // Generic: query the meta table. Since we don't have a dedicated command per table,
-    // we'll use get_entry which returns the full entry. For typed meta, we'd need
-    // dedicated commands. For now, return null — the real data comes when extractors run.
-    return null;
-  } catch { return null; }
-}
-
-async function loadAiAnnotations(entryId: number): Promise<AiAnnotation[]> {
-  try {
-    // Would need a dedicated command: get_ai_annotations
-    return [];
-  } catch { return []; }
-}
 
 async function loadCustomValues(entryId: number): Promise<CustomFieldValue[]> {
   try {
@@ -110,8 +71,9 @@ async function loadCustomValues(entryId: number): Promise<CustomFieldValue[]> {
 // Kind-specific sections
 // ============================================================================
 
-function ImageSection({ meta, filePath }: { meta: ImageMeta | null; filePath?: string }) {
+function ImageSection({ meta, filePath }: { meta: MetaImage | null; filePath?: string }) {
   if (!meta) return null;
+  const imageSrc = filePath ? convertFileSrc(filePath) : undefined;
   return (
     <Stack gap={6}>
       <Text size="xs" fw={600} c="dimmed" tt="uppercase" lts={0.5}>EXIF</Text>
@@ -122,7 +84,7 @@ function ImageSection({ meta, filePath }: { meta: ImageMeta | null; filePath?: s
       {meta.aperture && <Row label="Ouverture" value={`f/${meta.aperture}`} />}
       {meta.shutter_speed && <Row label="Vitesse" value={meta.shutter_speed} />}
       {meta.taken_at && <Row label="Prise le" value={formatDate(meta.taken_at)} />}
-      {filePath && <ImageHistogram seed={filePath} />}
+      <ImageHistogram imageSrc={imageSrc} />
       {meta.gps_lat != null && meta.gps_lon != null && (
         <GpsMiniMap lat={meta.gps_lat} lon={meta.gps_lon} />
       )}
@@ -130,7 +92,7 @@ function ImageSection({ meta, filePath }: { meta: ImageMeta | null; filePath?: s
   );
 }
 
-function AudioSection({ meta, filePath, isOnline }: { meta: AudioMeta | null; filePath?: string; isOnline?: boolean }) {
+function AudioSection({ meta, filePath, isOnline }: { meta: MetaAudio | null; filePath?: string; isOnline?: boolean }) {
   if (!meta) return null;
   const dur = meta.duration_ms ? `${Math.floor(meta.duration_ms / 60000)}:${String(Math.floor((meta.duration_ms % 60000) / 1000)).padStart(2, '0')}` : null;
   return (
@@ -146,17 +108,13 @@ function AudioSection({ meta, filePath, isOnline }: { meta: AudioMeta | null; fi
       {meta.sample_rate && <Row label="Sample rate" value={`${meta.sample_rate} Hz`} />}
       {meta.channels && <Row label="Canaux" value={String(meta.channels)} />}
       {meta.duration_ms && meta.duration_ms > 0 && (
-        <AudioWaveform
-          durationMs={meta.duration_ms}
-          canPlay={isOnline ?? true}
-          filePath={filePath}
-        />
+        <AudioWaveform durationMs={meta.duration_ms} canPlay={isOnline ?? true} filePath={filePath} />
       )}
     </Stack>
   );
 }
 
-function VideoSection({ meta }: { meta: VideoMeta | null }) {
+function VideoSection({ meta }: { meta: MetaVideo | null }) {
   if (!meta) return null;
   const dur = meta.duration_ms ? `${Math.floor(meta.duration_ms / 60000)}:${String(Math.floor((meta.duration_ms % 60000) / 1000)).padStart(2, '0')}` : null;
   return (
@@ -173,7 +131,7 @@ function VideoSection({ meta }: { meta: VideoMeta | null }) {
   );
 }
 
-function DocumentSection({ meta }: { meta: DocumentMeta | null }) {
+function DocumentSection({ meta }: { meta: MetaDocument | null }) {
   if (!meta) return null;
   return (
     <Stack gap={6}>
@@ -190,7 +148,7 @@ function DocumentSection({ meta }: { meta: DocumentMeta | null }) {
 // AI section
 // ============================================================================
 
-function AiSection({ entryId, kind, annotations }: { entryId: number; kind: FileKind; annotations: AiAnnotation[] }) {
+function AiSection({ entryId, kind, annotations }: { entryId: number; kind: FileKind; annotations: AiAnnotationRow[] }) {
   const [loading, setLoading] = useState(false);
   const docType = annotations.find((a) => a.kind === 'doc_type');
   const labels = annotations.filter((a) => a.kind === 'label');
@@ -369,21 +327,39 @@ export default function Inspector({ entrySlim, allTags, onClose, onTagFilter, on
   const [fullEntry, setFullEntry] = useState<Entry | null>(null);
   const [entryTags, setEntryTags] = useState<TagInfo[]>([]);
   const [customFields, setCustomFields] = useState<CustomFieldValue[]>([]);
-  const [aiAnnotations, setAiAnnotations] = useState<AiAnnotation[]>([]);
-  // Typed meta (loaded when we have commands)
-  const [imageMeta, setImageMeta] = useState<ImageMeta | null>(null);
-  const [audioMeta, setAudioMeta] = useState<AudioMeta | null>(null);
-  const [videoMeta, setVideoMeta] = useState<VideoMeta | null>(null);
-  const [docMeta, setDocMeta] = useState<DocumentMeta | null>(null);
+  const [aiAnnotations, setAiAnnotations] = useState<AiAnnotationRow[]>([]);
+  const [imageMeta, setImageMeta] = useState<MetaImage | null>(null);
+  const [audioMeta, setAudioMeta] = useState<MetaAudio | null>(null);
+  const [videoMeta, setVideoMeta] = useState<MetaVideo | null>(null);
+  const [docMeta, setDocMeta] = useState<MetaDocument | null>(null);
 
   // Load data when entry changes
   useEffect(() => {
     if (!entrySlim) return;
     const id = entrySlim.id;
-    loadFullEntry(id).then(setFullEntry);
+    // Reset typed meta to avoid stale data flashing
+    setImageMeta(null); setAudioMeta(null); setVideoMeta(null); setDocMeta(null); setAiAnnotations([]);
+
+    entryApi.get(id).then(setFullEntry);
     tagApi.getEntryTags(id).then((tags) => setEntryTags(tags.map(([i,n,c]) => ({ id: i, name: n, color: c }))));
     loadCustomValues(id).then(setCustomFields);
-    loadAiAnnotations(id).then(setAiAnnotations);
+    metaApi.getAiAnnotations(id).then(setAiAnnotations).catch(() => {});
+
+    // Kind-specific metadata
+    switch (entrySlim.kind) {
+      case 'image':
+        metaApi.getImageMeta(id).then((m) => { if (m) setImageMeta(m); }).catch(() => {});
+        break;
+      case 'audio':
+        metaApi.getAudioMeta(id).then((m) => { if (m) setAudioMeta(m); }).catch(() => {});
+        break;
+      case 'video':
+        metaApi.getVideoMeta(id).then((m) => { if (m) setVideoMeta(m); }).catch(() => {});
+        break;
+      case 'document':
+        metaApi.getDocMeta(id).then((m) => { if (m) setDocMeta(m); }).catch(() => {});
+        break;
+    }
   }, [entrySlim?.id]);
 
   if (!entrySlim) {

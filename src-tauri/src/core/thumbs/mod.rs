@@ -49,24 +49,50 @@ pub struct ThumbSize {
 }
 
 impl ThumbSize {
-    pub const THUMB: Self = Self { max_width: 256, max_height: 256, quality: 75 };
-    pub const PREVIEW: Self = Self { max_width: 800, max_height: 800, quality: 82 };
+    pub const THUMB: Self = Self {
+        max_width: 256,
+        max_height: 256,
+        quality: 75,
+    };
+    pub const PREVIEW: Self = Self {
+        max_width: 800,
+        max_height: 800,
+        quality: 82,
+    };
 
-    pub fn suffix(&self) -> u32 { self.max_width }
+    pub fn suffix(&self) -> u32 {
+        self.max_width
+    }
 }
 
 // ============================================================================
 // Cache paths
 // ============================================================================
 
-pub fn cache_path(cache_dir: &Path, quick_hash: Option<&str>, entry_id: i64, size: &ThumbSize) -> PathBuf {
+pub fn cache_path(
+    cache_dir: &Path,
+    quick_hash: Option<&str>,
+    entry_id: i64,
+    size: &ThumbSize,
+) -> PathBuf {
     match quick_hash {
-        Some(h) if h.len() >= 2 => cache_dir.join(&h[..2]).join(format!("{}_{}.jpg", h, size.suffix())),
-        _ => cache_dir.join("by_id").join(format!("{}_{}.jpg", entry_id, size.suffix())),
+        Some(h) if h.len() >= 2 => {
+            cache_dir
+                .join(&h[..2])
+                .join(format!("{}_{}.jpg", h, size.suffix()))
+        }
+        _ => cache_dir
+            .join("by_id")
+            .join(format!("{}_{}.jpg", entry_id, size.suffix())),
     }
 }
 
-pub fn cache_exists(cache_dir: &Path, quick_hash: Option<&str>, entry_id: i64, size: &ThumbSize) -> bool {
+pub fn cache_exists(
+    cache_dir: &Path,
+    quick_hash: Option<&str>,
+    entry_id: i64,
+    size: &ThumbSize,
+) -> bool {
     cache_path(cache_dir, quick_hash, entry_id, size).exists()
 }
 
@@ -85,11 +111,18 @@ pub struct ThumbOutput {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum ThumbSource { Generated, Embedded, Cached }
+pub enum ThumbSource {
+    Generated,
+    Embedded,
+    Cached,
+}
 
 impl ThumbSource {
     pub fn as_str(&self) -> &'static str {
-        match self { Self::Generated | Self::Cached => "generated", Self::Embedded => "embedded" }
+        match self {
+            Self::Generated | Self::Cached => "generated",
+            Self::Embedded => "embedded",
+        }
     }
 }
 
@@ -98,21 +131,32 @@ impl ThumbSource {
 // ============================================================================
 
 pub fn generate(
-    source: &Path, kind: &str, ext: Option<&str>, cache_dir: &Path,
-    quick_hash: Option<&str>, entry_id: i64, size: ThumbSize,
+    source: &Path,
+    kind: &str,
+    ext: Option<&str>,
+    cache_dir: &Path,
+    quick_hash: Option<&str>,
+    entry_id: i64,
+    size: ThumbSize,
 ) -> ThumbResult<Option<ThumbOutput>> {
     let out_path = cache_path(cache_dir, quick_hash, entry_id, &size);
 
     // Cache hit — return immediately, no fs::metadata needed beyond exists()
     if out_path.exists() {
         return Ok(Some(ThumbOutput {
-            path: out_path, width: 0, height: 0, bytes: 0,
-            mime: "image/jpeg".into(), source: ThumbSource::Cached,
+            path: out_path,
+            width: 0,
+            height: 0,
+            bytes: 0,
+            mime: "image/jpeg".into(),
+            source: ThumbSource::Cached,
         }));
     }
 
     // Ensure parent dir (idempotent, but cheap for repeated calls to same prefix)
-    if let Some(p) = out_path.parent() { fs::create_dir_all(p)?; }
+    if let Some(p) = out_path.parent() {
+        fs::create_dir_all(p)?;
+    }
 
     let result = match kind {
         "image" => gen_image(source, &out_path, &size),
@@ -149,8 +193,12 @@ fn gen_image(source: &Path, out: &Path, size: &ThumbSize) -> ThumbResult<ThumbOu
     let meta = fs::metadata(out)?;
     // Read actual dimensions from the saved image? Not critical — the UI can derive from aspect ratio.
     Ok(ThumbOutput {
-        path: out.into(), width: w.min(size.max_width), height: h.min(size.max_height),
-        bytes: meta.len() as i64, mime: "image/jpeg".into(), source: ThumbSource::Generated,
+        path: out.into(),
+        width: w.min(size.max_width),
+        height: h.min(size.max_height),
+        bytes: meta.len() as i64,
+        mime: "image/jpeg".into(),
+        source: ThumbSource::Generated,
     })
 }
 
@@ -162,7 +210,12 @@ fn save_jpeg(img: &DynamicImage, path: &Path, quality: u8) -> ThumbResult<()> {
     let file = fs::File::create(path)?;
     let writer = BufWriter::new(file);
     let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(writer, quality);
-    encoder.write_image(rgb.as_raw(), rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)?;
+    encoder.write_image(
+        rgb.as_raw(),
+        rgb.width(),
+        rgb.height(),
+        image::ExtendedColorType::Rgb8,
+    )?;
     Ok(())
 }
 
@@ -174,11 +227,20 @@ fn gen_video(source: &Path, out: &Path, size: &ThumbSize) -> ThumbResult<ThumbOu
     // Let FFmpeg do both extraction AND scaling in one pass (no intermediate decode)
     let status = Command::new("ffmpeg")
         .args([
-            "-y", "-ss", "5",
-            "-i", &source.to_string_lossy(),
-            "-vframes", "1",
-            "-vf", &format!("scale={}:{}:force_original_aspect_ratio=decrease", size.max_width, size.max_height),
-            "-q:v", &size.quality.to_string(), // JPEG quality
+            "-y",
+            "-ss",
+            "5",
+            "-i",
+            &source.to_string_lossy(),
+            "-vframes",
+            "1",
+            "-vf",
+            &format!(
+                "scale={}:{}:force_original_aspect_ratio=decrease",
+                size.max_width, size.max_height
+            ),
+            "-q:v",
+            &size.quality.to_string(), // JPEG quality
             &out.to_string_lossy(),
         ])
         .stdout(std::process::Stdio::null())
@@ -189,8 +251,12 @@ fn gen_video(source: &Path, out: &Path, size: &ThumbSize) -> ThumbResult<ThumbOu
         Ok(s) if s.success() && out.exists() => {
             let meta = fs::metadata(out)?;
             Ok(ThumbOutput {
-                path: out.into(), width: size.max_width, height: size.max_height,
-                bytes: meta.len() as i64, mime: "image/jpeg".into(), source: ThumbSource::Generated,
+                path: out.into(),
+                width: size.max_width,
+                height: size.max_height,
+                bytes: meta.len() as i64,
+                mime: "image/jpeg".into(),
+                source: ThumbSource::Generated,
             })
         }
         Ok(s) => Err(ThumbError::Ffmpeg(format!("exit {:?}", s.code()))),
@@ -202,7 +268,12 @@ fn gen_video(source: &Path, out: &Path, size: &ThumbSize) -> ThumbResult<ThumbOu
 // Audio (ID3 / FLAC cover)
 // ============================================================================
 
-fn gen_audio(source: &Path, ext: Option<&str>, out: &Path, size: &ThumbSize) -> ThumbResult<ThumbOutput> {
+fn gen_audio(
+    source: &Path,
+    ext: Option<&str>,
+    out: &Path,
+    size: &ThumbSize,
+) -> ThumbResult<ThumbOutput> {
     let data = match ext {
         Some("mp3") => extract_id3_cover(source)?,
         Some("flac") => extract_flac_cover(source)?,
@@ -213,26 +284,50 @@ fn gen_audio(source: &Path, ext: Option<&str>, out: &Path, size: &ThumbSize) -> 
 
 fn extract_id3_cover(source: &Path) -> ThumbResult<Vec<u8>> {
     let tag = id3::Tag::read_from_path(source).map_err(|_| ThumbError::NoCoverArt)?;
-    let result = tag.pictures().next().map(|p| p.data.clone()).ok_or(ThumbError::NoCoverArt);
+    let result = tag
+        .pictures()
+        .next()
+        .map(|p| p.data.clone())
+        .ok_or(ThumbError::NoCoverArt);
     result
 }
 
 fn extract_flac_cover(source: &Path) -> ThumbResult<Vec<u8>> {
     let tag = metaflac::Tag::read_from_path(source).map_err(|_| ThumbError::NoCoverArt)?;
-    let result = tag.pictures().next().map(|p| p.data.clone()).ok_or(ThumbError::NoCoverArt);
+    let result = tag
+        .pictures()
+        .next()
+        .map(|p| p.data.clone())
+        .ok_or(ThumbError::NoCoverArt);
     result
 }
 
 fn extract_cover_ffmpeg(source: &Path) -> ThumbResult<Vec<u8>> {
     let tmp = std::env::temp_dir().join(format!("wc_cover_{}.png", std::process::id()));
     let status = Command::new("ffmpeg")
-        .args(["-y", "-i", &source.to_string_lossy(), "-an", "-vcodec", "png", "-vframes", "1", &tmp.to_string_lossy()])
-        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+        .args([
+            "-y",
+            "-i",
+            &source.to_string_lossy(),
+            "-an",
+            "-vcodec",
+            "png",
+            "-vframes",
+            "1",
+            &tmp.to_string_lossy(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 
     let result = match status {
         Ok(s) if s.success() && tmp.exists() => {
             let d = fs::read(&tmp)?;
-            if d.is_empty() { Err(ThumbError::NoCoverArt) } else { Ok(d) }
+            if d.is_empty() {
+                Err(ThumbError::NoCoverArt)
+            } else {
+                Ok(d)
+            }
         }
         _ => Err(ThumbError::NoCoverArt),
     };
@@ -244,7 +339,12 @@ fn extract_cover_ffmpeg(source: &Path) -> ThumbResult<Vec<u8>> {
 // Document (Office ZIP / PDF)
 // ============================================================================
 
-fn gen_document(source: &Path, ext: Option<&str>, out: &Path, size: &ThumbSize) -> ThumbResult<ThumbOutput> {
+fn gen_document(
+    source: &Path,
+    ext: Option<&str>,
+    out: &Path,
+    size: &ThumbSize,
+) -> ThumbResult<ThumbOutput> {
     match ext {
         Some("docx") | Some("pptx") | Some("xlsx") => {
             let data = office::extract_office_thumbnail(source)?;
@@ -259,9 +359,21 @@ fn gen_pdf(source: &Path, out: &Path, size: &ThumbSize) -> ThumbResult<ThumbOutp
     // pdftoppm: render first page directly
     let prefix = out.with_extension("");
     let status = Command::new("pdftoppm")
-        .args(["-jpeg", "-f", "1", "-l", "1", "-scale-to", &size.max_width.to_string(), "-singlefile",
-               &source.to_string_lossy(), &prefix.to_string_lossy()])
-        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+        .args([
+            "-jpeg",
+            "-f",
+            "1",
+            "-l",
+            "1",
+            "-scale-to",
+            &size.max_width.to_string(),
+            "-singlefile",
+            &source.to_string_lossy(),
+            &prefix.to_string_lossy(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 
     let jpg_path = prefix.with_extension("jpg");
     if let Ok(s) = status {
@@ -270,8 +382,12 @@ fn gen_pdf(source: &Path, out: &Path, size: &ThumbSize) -> ThumbResult<ThumbOutp
             fs::rename(&jpg_path, out)?;
             let meta = fs::metadata(out)?;
             return Ok(ThumbOutput {
-                path: out.into(), width: size.max_width, height: size.max_height,
-                bytes: meta.len() as i64, mime: "image/jpeg".into(), source: ThumbSource::Generated,
+                path: out.into(),
+                width: size.max_width,
+                height: size.max_height,
+                bytes: meta.len() as i64,
+                mime: "image/jpeg".into(),
+                source: ThumbSource::Generated,
             });
         }
     }
@@ -283,7 +399,12 @@ fn gen_pdf(source: &Path, out: &Path, size: &ThumbSize) -> ThumbResult<ThumbOutp
 // Ebook (EPUB cover)
 // ============================================================================
 
-fn gen_ebook(source: &Path, ext: Option<&str>, out: &Path, size: &ThumbSize) -> ThumbResult<ThumbOutput> {
+fn gen_ebook(
+    source: &Path,
+    ext: Option<&str>,
+    out: &Path,
+    size: &ThumbSize,
+) -> ThumbResult<ThumbOutput> {
     match ext {
         Some("epub") => {
             let data = extract_epub_cover(source)?;
@@ -300,14 +421,26 @@ fn extract_epub_cover(source: &Path) -> ThumbResult<Vec<u8>> {
     let mut archive = zip::ZipArchive::new(file).map_err(|_| ThumbError::NoCoverArt)?;
 
     // Strategy 1: known cover paths
-    for name in &["cover.jpg","cover.jpeg","cover.png","Cover.jpg","Cover.jpeg",
-                   "OEBPS/cover.jpg","OEBPS/cover.jpeg","OEBPS/cover.png",
-                   "OEBPS/images/cover.jpg","OEBPS/images/cover.jpeg",
-                   "Images/cover.jpg","images/cover.jpg"] {
+    for name in &[
+        "cover.jpg",
+        "cover.jpeg",
+        "cover.png",
+        "Cover.jpg",
+        "Cover.jpeg",
+        "OEBPS/cover.jpg",
+        "OEBPS/cover.jpeg",
+        "OEBPS/cover.png",
+        "OEBPS/images/cover.jpg",
+        "OEBPS/images/cover.jpeg",
+        "Images/cover.jpg",
+        "images/cover.jpg",
+    ] {
         if let Ok(mut entry) = archive.by_name(name) {
             let mut buf = Vec::with_capacity(entry.size() as usize);
             entry.read_to_end(&mut buf)?;
-            if !buf.is_empty() { return Ok(buf); }
+            if !buf.is_empty() {
+                return Ok(buf);
+            }
         }
     }
 
@@ -316,15 +449,20 @@ fn extract_epub_cover(source: &Path) -> ThumbResult<Vec<u8>> {
         let (is_cover, size) = {
             if let Ok(e) = archive.by_index(i) {
                 let n = e.name().to_lowercase();
-                let ok = n.contains("cover") && (n.ends_with(".jpg") || n.ends_with(".jpeg") || n.ends_with(".png"));
+                let ok = n.contains("cover")
+                    && (n.ends_with(".jpg") || n.ends_with(".jpeg") || n.ends_with(".png"));
                 (ok, e.size() as usize)
-            } else { continue; }
+            } else {
+                continue;
+            }
         };
         if is_cover {
             let mut entry = archive.by_index(i).map_err(|_| ThumbError::NoCoverArt)?;
             let mut buf = Vec::with_capacity(size);
             std::io::Read::read_to_end(&mut entry, &mut buf)?;
-            if !buf.is_empty() { return Ok(buf); }
+            if !buf.is_empty() {
+                return Ok(buf);
+            }
         }
     }
 
@@ -348,8 +486,12 @@ fn encode_embedded_image(data: &[u8], out: &Path, size: &ThumbSize) -> ThumbResu
 
     let meta = fs::metadata(out)?;
     Ok(ThumbOutput {
-        path: out.into(), width: w.min(size.max_width), height: h.min(size.max_height),
-        bytes: meta.len() as i64, mime: "image/jpeg".into(), source: ThumbSource::Embedded,
+        path: out.into(),
+        width: w.min(size.max_width),
+        height: h.min(size.max_height),
+        bytes: meta.len() as i64,
+        mime: "image/jpeg".into(),
+        source: ThumbSource::Embedded,
     })
 }
 
@@ -369,8 +511,9 @@ pub fn cleanup_cache(cache_dir: &Path, max_size_bytes: u64) -> ThumbResult<u64> 
         if let Ok(rd) = fs::read_dir(dir) {
             for e in rd.flatten() {
                 let p = e.path();
-                if p.is_dir() { collect(&p, out, total); }
-                else if let Ok(m) = fs::metadata(&p) {
+                if p.is_dir() {
+                    collect(&p, out, total);
+                } else if let Ok(m) = fs::metadata(&p) {
                     let sz = m.len();
                     *total += sz;
                     out.push((p, sz, m.accessed().unwrap_or(std::time::UNIX_EPOCH)));
@@ -380,13 +523,19 @@ pub fn cleanup_cache(cache_dir: &Path, max_size_bytes: u64) -> ThumbResult<u64> 
     }
     collect(cache_dir, &mut entries, &mut total);
 
-    if total <= max_size_bytes { return Ok(0); }
+    if total <= max_size_bytes {
+        return Ok(0);
+    }
 
     entries.sort_by_key(|(_, _, t)| *t); // oldest first
     let mut freed: u64 = 0;
     for (path, sz, _) in &entries {
-        if total - freed <= max_size_bytes { break; }
-        if fs::remove_file(path).is_ok() { freed += sz; }
+        if total - freed <= max_size_bytes {
+            break;
+        }
+        if fs::remove_file(path).is_ok() {
+            freed += sz;
+        }
     }
     log::info!("Cache cleanup: freed {} MB", freed / (1024 * 1024));
     Ok(freed)

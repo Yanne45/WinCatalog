@@ -9,6 +9,7 @@ import {
   ColorInput, ActionIcon, Modal, Checkbox, Select, NumberInput,
   ScrollArea, Divider, Tooltip, Alert,
 } from '@mantine/core';
+import { modals } from '@mantine/modals';
 import {
   IconTag, IconFolder, IconPlus, IconTrash, IconEdit,
   IconBolt, IconCheck, IconX, IconRefresh,
@@ -72,12 +73,18 @@ function TagsTab() {
     } catch (e) { console.error('Failed to update tag:', e); }
   }, [editName, editColor, loadTags]);
 
-  const handleDelete = useCallback(async (id: number) => {
+  const handleDelete = useCallback((id: number) => {
     const tag = tags.find((t) => t.id === id);
-    if (!window.confirm(`Supprimer le tag « ${tag?.name ?? id} » ? Cette action est irréversible.`)) return;
-    try {
-      await invoke('delete_tag', { id }); loadTags();
-    } catch (e) { console.error('Failed to delete tag:', e); }
+    modals.openConfirmModal({
+      title: 'Supprimer le tag',
+      children: <Text size="sm">Supprimer « {tag?.name ?? id} » ? Cette action est irréversible.</Text>,
+      labels: { confirm: 'Supprimer', cancel: 'Annuler' },
+      confirmProps: { color: 'red' },
+      onConfirm: async () => {
+        try { await invoke('delete_tag', { id }); loadTags(); }
+        catch (e) { console.error('Failed to delete tag:', e); }
+      },
+    });
   }, [tags, loadTags]);
 
   return (
@@ -161,12 +168,18 @@ function CollectionsTab() {
     } catch (e) { console.error('Failed to create collection:', e); }
   }, [newName, newSmart, load]);
 
-  const handleDelete = useCallback(async (id: number) => {
+  const handleDelete = useCallback((id: number) => {
     const col = collections.find((c) => c.id === id);
-    if (!window.confirm(`Supprimer la collection « ${col?.name ?? id} » ? Cette action est irréversible.`)) return;
-    try {
-      await invoke('delete_collection', { id }); load();
-    } catch (e) { console.error('Failed to delete collection:', e); }
+    modals.openConfirmModal({
+      title: 'Supprimer la collection',
+      children: <Text size="sm">Supprimer « {col?.name ?? id} » ? Cette action est irréversible.</Text>,
+      labels: { confirm: 'Supprimer', cancel: 'Annuler' },
+      confirmProps: { color: 'red' },
+      onConfirm: async () => {
+        try { await invoke('delete_collection', { id }); load(); }
+        catch (e) { console.error('Failed to delete collection:', e); }
+      },
+    });
   }, [collections, load]);
 
   return (
@@ -235,8 +248,13 @@ function RulesTab() {
 
   const deleteRule = useCallback((id: string) => {
     const rule = rules.find((r) => r.id === id);
-    if (!window.confirm(`Supprimer la règle « ${rule?.name ?? id} » ?`)) return;
-    save(rules.filter((r) => r.id !== id));
+    modals.openConfirmModal({
+      title: 'Supprimer la règle',
+      children: <Text size="sm">Supprimer « {rule?.name ?? id} » ?</Text>,
+      labels: { confirm: 'Supprimer', cancel: 'Annuler' },
+      confirmProps: { color: 'red' },
+      onConfirm: () => save(rules.filter((r) => r.id !== id)),
+    });
   }, [rules, save]);
 
   const addRule = useCallback(() => {

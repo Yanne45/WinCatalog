@@ -34,13 +34,30 @@ use crate::db::{Database, DbResult};
 #[serde(tag = "type")]
 pub enum JobEvent {
     /// A job started executing
-    Started { job_id: i64, job_type: String, variant: Option<String> },
+    Started {
+        job_id: i64,
+        job_type: String,
+        variant: Option<String>,
+    },
     /// Progress update on current job
-    Progress { job_id: i64, progress: f64, detail: String },
+    Progress {
+        job_id: i64,
+        progress: f64,
+        detail: String,
+    },
     /// Job finished successfully
-    Done { job_id: i64, job_type: String, duration_ms: u64 },
+    Done {
+        job_id: i64,
+        job_type: String,
+        duration_ms: u64,
+    },
     /// Job failed (may retry)
-    Failed { job_id: i64, job_type: String, error: String, will_retry: bool },
+    Failed {
+        job_id: i64,
+        job_type: String,
+        error: String,
+        will_retry: bool,
+    },
     /// Queue is empty, runner is idle
     Idle,
     /// Runner paused/resumed
@@ -135,11 +152,7 @@ impl Drop for JobRunner {
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_CONSECUTIVE_ERRORS: u32 = 5; // Back off if DB keeps failing
 
-fn runner_loop(
-    db: Database,
-    cmd_rx: Receiver<RunnerCommand>,
-    on_event: Option<JobEventCallback>,
-) {
+fn runner_loop(db: Database, cmd_rx: Receiver<RunnerCommand>, on_event: Option<JobEventCallback>) {
     let paused = AtomicBool::new(false);
     let cancel_current = Arc::new(AtomicBool::new(false));
     let mut consecutive_errors: u32 = 0;
@@ -241,7 +254,11 @@ fn runner_loop(
 
         log::info!(
             "Job runner: executing job #{} type={} variant={:?} volume={:?} entry={:?}",
-            job.id, job.job_type, job.variant, job.volume_id, job.entry_id
+            job.id,
+            job.job_type,
+            job.variant,
+            job.volume_id,
+            job.entry_id
         );
 
         // Reset cancel flag
@@ -264,7 +281,8 @@ fn runner_loop(
                 log::info!("Job #{} done in {}ms", job.id, duration_ms);
             }
             Err(JobExecError::Canceled) => {
-                let _ = update_job_status(&db, job.id, "canceled", 0.0, Some("Canceled by user"), now);
+                let _ =
+                    update_job_status(&db, job.id, "canceled", 0.0, Some("Canceled by user"), now);
                 log::info!("Job #{} canceled", job.id);
             }
             Err(JobExecError::Failed(err)) => {
@@ -279,8 +297,15 @@ fn runner_loop(
                 });
                 log::warn!(
                     "Job #{} failed (attempt {}/{}): {} — {}",
-                    job.id, job.attempts, job.max_attempts, err,
-                    if will_retry { "will retry" } else { "giving up" }
+                    job.id,
+                    job.attempts,
+                    job.max_attempts,
+                    err,
+                    if will_retry {
+                        "will retry"
+                    } else {
+                        "giving up"
+                    }
                 );
             }
         }
@@ -406,9 +431,9 @@ fn execute_hash_job(
     cancel: &Arc<AtomicBool>,
     _emit: &(dyn Fn(JobEvent) + Sync),
 ) -> Result<(), JobExecError> {
-    let volume_id = job.volume_id.ok_or_else(|| {
-        JobExecError::Failed("Hash job missing volume_id".into())
-    })?;
+    let volume_id = job
+        .volume_id
+        .ok_or_else(|| JobExecError::Failed("Hash job missing volume_id".into()))?;
 
     let mode = job.variant.as_deref().unwrap_or("full");
     let _job_id = job.id;
@@ -419,26 +444,20 @@ fn execute_hash_job(
     let cancel_flag = cancel.clone();
     let stop_watcher = Arc::new(AtomicBool::new(false));
     let stop_flag = stop_watcher.clone();
-    let cancel_handle = thread::spawn(move || {
-        loop {
-            if cancel_flag.load(Ordering::Relaxed) {
-                let _ = cancel_tx.send(());
-                return;
-            }
-            if stop_flag.load(Ordering::Relaxed) {
-                return;
-            }
-            thread::sleep(Duration::from_millis(100));
+    let cancel_handle = thread::spawn(move || loop {
+        if cancel_flag.load(Ordering::Relaxed) {
+            let _ = cancel_tx.send(());
+            return;
         }
+        if stop_flag.load(Ordering::Relaxed) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(100));
     });
 
     let result = hasher::run_hash(
-        db,
-        volume_id,
-        mode,
-        0, // min_size
-        cancel_rx,
-        None,
+        db, volume_id, mode, 0, // min_size
+        cancel_rx, None,
     );
 
     // Signal the watcher thread to stop (without corrupting the shared cancel flag)
@@ -462,9 +481,9 @@ fn execute_thumb_job(
     cancel: &Arc<AtomicBool>,
     emit: &(dyn Fn(JobEvent) + Sync),
 ) -> Result<(), JobExecError> {
-    let volume_id = job.volume_id.ok_or_else(|| {
-        JobExecError::Failed("Thumb job missing volume_id".into())
-    })?;
+    let volume_id = job
+        .volume_id
+        .ok_or_else(|| JobExecError::Failed("Thumb job missing volume_id".into()))?;
 
     let job_id = job.id;
 
@@ -484,8 +503,7 @@ fn execute_thumb_job(
                 .query_map(params![volume_id], |r| {
                     Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
                 })?
-                .filter_map(|r| r.ok())
-                .collect();
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
         })
         .map_err(|e| JobExecError::Failed(e.to_string()))?;
@@ -498,8 +516,11 @@ fn execute_thumb_job(
     // Resolve cache dir (use app_data_dir from settings or fallback)
     let cache_dir = db
         .read(|conn| {
-            let mut stmt = conn.prepare_cached("SELECT value FROM settings WHERE key = 'cache.thumbs_dir'")?;
-            stmt.query_row([], |r| r.get::<_, String>(0)).optional().map_err(crate::db::DbError::Sqlite)
+            let mut stmt =
+                conn.prepare_cached("SELECT value FROM settings WHERE key = 'cache.thumbs_dir'")?;
+            stmt.query_row([], |r| r.get::<_, String>(0))
+                .optional()
+                .map_err(crate::db::DbError::Sqlite)
         })
         .ok()
         .flatten()
@@ -575,7 +596,9 @@ fn execute_thumb_job(
 
     log::info!(
         "Thumb job done: {}/{} processed, {} errors",
-        processed, total, errors
+        processed,
+        total,
+        errors
     );
     Ok(())
 }
@@ -590,7 +613,9 @@ fn execute_extract_meta_job(
     cancel: &Arc<AtomicBool>,
     emit: &(dyn Fn(JobEvent) + Sync),
 ) -> Result<(), JobExecError> {
-    let volume_id = job.volume_id.ok_or_else(|| JobExecError::Failed("Missing volume_id".into()))?;
+    let volume_id = job
+        .volume_id
+        .ok_or_else(|| JobExecError::Failed("Missing volume_id".into()))?;
     let kind = job.variant.as_deref().unwrap_or("unknown");
 
     use crate::core::extractors;
@@ -600,7 +625,10 @@ fn execute_extract_meta_job(
     emit(JobEvent::Progress {
         job_id: job.id,
         progress: 1.0,
-        detail: format!("{} extracted, {} errors for kind={}", extracted, errors, kind),
+        detail: format!(
+            "{} extracted, {} errors for kind={}",
+            extracted, errors, kind
+        ),
     });
 
     Ok(())
@@ -616,7 +644,6 @@ fn ts() -> i64 {
         .unwrap_or_default()
         .as_secs() as i64
 }
-
 
 // rusqlite OptionalExtension
 use rusqlite::OptionalExtension;

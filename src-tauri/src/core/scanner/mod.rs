@@ -11,8 +11,8 @@
 // ============================================================================
 
 pub mod kind;
-pub mod watch;
 pub mod parallel;
+pub mod watch;
 
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -59,7 +59,10 @@ pub struct ScanConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ScanMode { Full, Quick }
+pub enum ScanMode {
+    Full,
+    Quick,
+}
 
 impl Default for ScanConfig {
     fn default() -> Self {
@@ -69,8 +72,12 @@ impl Default for ScanConfig {
             mode: ScanMode::Full,
             max_depth: Some(50),
             exclusions: vec![
-                "node_modules".into(), ".git".into(), ".DS_Store".into(),
-                "Thumbs.db".into(), "$RECYCLE.BIN".into(), "System Volume Information".into(),
+                "node_modules".into(),
+                ".git".into(),
+                ".DS_Store".into(),
+                "Thumbs.db".into(),
+                "$RECYCLE.BIN".into(),
+                "System Volume Information".into(),
             ],
             follow_symlinks: false,
             batch_size: 500,
@@ -87,11 +94,31 @@ impl Default for ScanConfig {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type")]
 pub enum ScanEvent {
-    Started { scan_id: i64, volume_id: i64, mode: String },
-    Progress { scan_id: i64, phase: String, files_processed: u64, dirs_processed: u64, bytes_found: u64 },
-    PhaseComplete { scan_id: i64, phase: String },
-    Completed { scan_id: i64, stats: ScanStats },
-    Error { scan_id: i64, path: String, error: String },
+    Started {
+        scan_id: i64,
+        volume_id: i64,
+        mode: String,
+    },
+    Progress {
+        scan_id: i64,
+        phase: String,
+        files_processed: u64,
+        dirs_processed: u64,
+        bytes_found: u64,
+    },
+    PhaseComplete {
+        scan_id: i64,
+        phase: String,
+    },
+    Completed {
+        scan_id: i64,
+        stats: ScanStats,
+    },
+    Error {
+        scan_id: i64,
+        path: String,
+        error: String,
+    },
 }
 
 pub type EventCallback = Box<dyn Fn(ScanEvent) + Send>;
@@ -125,53 +152,83 @@ pub fn run_scan(
     let start = Instant::now();
 
     if !config.root_path.exists() {
-        return Err(ScanError::PathNotAccessible(config.root_path.display().to_string()));
+        return Err(ScanError::PathNotAccessible(
+            config.root_path.display().to_string(),
+        ));
     }
 
     // Verify volume exists
     db.read(|conn| {
-        conn.query_row("SELECT id FROM volumes WHERE id=?1", params![config.volume_id], |r| r.get::<_,i64>(0))
-            .map_err(crate::db::DbError::Sqlite)
-    }).map_err(|_| ScanError::VolumeNotFound(config.volume_id))?;
+        conn.query_row(
+            "SELECT id FROM volumes WHERE id=?1",
+            params![config.volume_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_err(crate::db::DbError::Sqlite)
+    })
+    .map_err(|_| ScanError::VolumeNotFound(config.volume_id))?;
 
-    let mode_str = match config.mode { ScanMode::Full => "full", ScanMode::Quick => "quick" };
+    let mode_str = match config.mode {
+        ScanMode::Full => "full",
+        ScanMode::Quick => "quick",
+    };
     let vol_id = config.volume_id;
 
     // Create scan record
     let scan_id = db.write(move |conn| {
-        conn.execute("INSERT INTO scans (volume_id,mode,status,started_at) VALUES (?1,?2,'running',?3)",
-            params![vol_id, mode_str, now])?;
+        conn.execute(
+            "INSERT INTO scans (volume_id,mode,status,started_at) VALUES (?1,?2,'running',?3)",
+            params![vol_id, mode_str, now],
+        )?;
         Ok(conn.last_insert_rowid())
     })?;
 
-    let emit = |evt: ScanEvent| { if let Some(ref cb) = on_event { cb(evt); } };
+    let emit = |evt: ScanEvent| {
+        if let Some(ref cb) = on_event {
+            cb(evt);
+        }
+    };
 
-    emit(ScanEvent::Started { scan_id, volume_id: config.volume_id, mode: mode_str.into() });
-    log::info!("Scan #{} started: {} on volume {} ({})", scan_id, mode_str, config.volume_id, config.root_path.display());
+    emit(ScanEvent::Started {
+        scan_id,
+        volume_id: config.volume_id,
+        mode: mode_str.into(),
+    });
+    log::info!(
+        "Scan #{} started: {} on volume {} ({})",
+        scan_id,
+        mode_str,
+        config.volume_id,
+        config.root_path.display()
+    );
 
-    let mut stats = ScanStats { scan_id, ..Default::default() };
+    let mut stats = ScanStats {
+        scan_id,
+        ..Default::default()
+    };
     let volume_id = config.volume_id;
 
     // ====================================================================
     // PHASE A — Discovery: walk filesystem, batch upsert
     // ====================================================================
     // For Quick scan: load existing (path → mtime, size) map to skip unchanged
-    let existing_map: Option<std::collections::HashMap<String, (i64, i64)>> =
-        if config.mode == ScanMode::Quick {
-            let map = db.read(|conn| {
+    let existing_map: Option<std::collections::HashMap<String, (i64, i64)>> = if config.mode
+        == ScanMode::Quick
+    {
+        let map = db.read(|conn| {
                 let mut stmt = conn.prepare_cached(
                     "SELECT path, COALESCE(mtime,0), size_bytes FROM entries WHERE volume_id=?1 AND status='present'")?;
-                let rows: Vec<(String, i64, i64)> = stmt.query_map(params![volume_id], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                })?.filter_map(|r| r.ok()).collect();
+                let rows: Vec<(String, i64, i64)> = stmt
+                    .query_map(params![volume_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
                 let mut m = std::collections::HashMap::with_capacity(rows.len());
                 for (p, mt, sz) in rows { m.insert(p, (mt, sz)); }
                 Ok(m)
             })?;
-            Some(map)
-        } else {
-            None
-        };
+        Some(map)
+    } else {
+        None
+    };
 
     let mut batch: Vec<EntryUpsert> = Vec::with_capacity(config.batch_size);
 
@@ -182,13 +239,21 @@ pub fn run_scan(
 
     for result in walker {
         if cancel.try_recv().is_ok() {
-            finalize_scan(db, scan_id, "canceled", &stats, start.elapsed().as_millis() as u64)?;
+            finalize_scan(
+                db,
+                scan_id,
+                "canceled",
+                &stats,
+                start.elapsed().as_millis() as u64,
+            )?;
             return Err(ScanError::Canceled);
         }
 
         match result {
             Ok(dir_entry) => {
-                if should_exclude(&dir_entry, &config.exclusions) { continue; }
+                if should_exclude(&dir_entry, &config.exclusions) {
+                    continue;
+                }
 
                 match build_entry(&dir_entry, volume_id, now) {
                     Ok(entry) => {
@@ -208,9 +273,13 @@ pub fn run_scan(
                                     batch.push(entry);
                                     if batch.len() >= config.batch_size {
                                         flush_batch(db, &mut batch)?;
-                                        emit(ScanEvent::Progress { scan_id, phase: "discovery".into(),
-                                            files_processed: stats.files_total, dirs_processed: stats.dirs_total,
-                                            bytes_found: stats.bytes_total });
+                                        emit(ScanEvent::Progress {
+                                            scan_id,
+                                            phase: "discovery".into(),
+                                            files_processed: stats.files_total,
+                                            dirs_processed: stats.dirs_total,
+                                            bytes_found: stats.bytes_total,
+                                        });
                                     }
                                     continue;
                                 }
@@ -221,23 +290,39 @@ pub fn run_scan(
                     }
                     Err(e) => {
                         stats.errors += 1;
-                        emit(ScanEvent::Error { scan_id, path: dir_entry.path().display().to_string(), error: e.to_string() });
+                        emit(ScanEvent::Error {
+                            scan_id,
+                            path: dir_entry.path().display().to_string(),
+                            error: e.to_string(),
+                        });
                     }
                 }
 
                 if batch.len() >= config.batch_size {
                     flush_batch(db, &mut batch)?;
-                    emit(ScanEvent::Progress { scan_id, phase: "discovery".into(),
-                        files_processed: stats.files_total, dirs_processed: stats.dirs_total,
-                        bytes_found: stats.bytes_total });
+                    emit(ScanEvent::Progress {
+                        scan_id,
+                        phase: "discovery".into(),
+                        files_processed: stats.files_total,
+                        dirs_processed: stats.dirs_total,
+                        bytes_found: stats.bytes_total,
+                    });
                 }
             }
-            Err(e) => { stats.errors += 1; log::warn!("Walk error: {}", e); }
+            Err(e) => {
+                stats.errors += 1;
+                log::warn!("Walk error: {}", e);
+            }
         }
     }
 
-    if !batch.is_empty() { flush_batch(db, &mut batch)?; }
-    emit(ScanEvent::PhaseComplete { scan_id, phase: "discovery".into() });
+    if !batch.is_empty() {
+        flush_batch(db, &mut batch)?;
+    }
+    emit(ScanEvent::PhaseComplete {
+        scan_id,
+        phase: "discovery".into(),
+    });
 
     // ====================================================================
     // PHASE B — Diff: detect added / modified / deleted via last_seen_at
@@ -261,9 +346,13 @@ pub fn run_scan(
                 "SELECT id, path, size_bytes, COALESCE(mtime,0) FROM entries
                  WHERE volume_id=?1 AND status='present' AND last_seen_at=?2"
             ).map_err(DbError::Sqlite)?;
-            let current: Vec<(i64, String, i64, i64)> = stmt.query_map(params![volume_id, now], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            }).map_err(DbError::Sqlite)?.filter_map(|r| r.ok()).collect();
+            let current: Vec<(i64, String, i64, i64)> = stmt
+                .query_map(params![volume_id, now], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })
+                .map_err(DbError::Sqlite)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(DbError::Sqlite)?;
 
             for (entry_id, path, size, mtime) in &current {
                 match map.get(path.as_str()) {
@@ -306,9 +395,11 @@ pub fn run_scan(
             let mut stmt = tx.prepare_cached(
                 "SELECT id, path, size_bytes FROM entries WHERE volume_id=?1 AND status='present' AND last_seen_at < ?2"
             ).map_err(DbError::Sqlite)?;
-            let missing: Vec<(i64, String, i64)> = stmt.query_map(params![volume_id, now], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            }).map_err(DbError::Sqlite)?.filter_map(|r| r.ok()).collect();
+            let missing: Vec<(i64, String, i64)> = stmt
+                .query_map(params![volume_id, now], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .map_err(DbError::Sqlite)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(DbError::Sqlite)?;
 
             for (eid, path, size) in &missing {
                 tx.execute("UPDATE entries SET status='missing' WHERE id=?1", params![eid]).map_err(DbError::Sqlite)?;
@@ -326,7 +417,10 @@ pub fn run_scan(
     stats.files_added = diff_stats.0;
     stats.files_modified = diff_stats.1;
     stats.files_deleted = diff_stats.2;
-    emit(ScanEvent::PhaseComplete { scan_id, phase: "diff".into() });
+    emit(ScanEvent::PhaseComplete {
+        scan_id,
+        phase: "diff".into(),
+    });
 
     // ====================================================================
     // PHASE C — Schedule post-scan jobs + analytics
@@ -391,8 +485,11 @@ pub fn run_scan(
             let mut stmt = tx.prepare_cached(
                 "SELECT kind, COUNT(*), COALESCE(SUM(size_bytes),0) FROM entries WHERE volume_id=?1 AND status='present' GROUP BY kind"
             ).map_err(DbError::Sqlite)?;
-            let rows: Vec<(String,i64,i64)> = stmt.query_map(params![volume_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))
-                .map_err(DbError::Sqlite)?.filter_map(|r| r.ok()).collect();
+            let rows: Vec<(String, i64, i64)> = stmt
+                .query_map(params![volume_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .map_err(DbError::Sqlite)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(DbError::Sqlite)?;
             for (k,c,b) in &rows {
                 tx.execute("INSERT OR REPLACE INTO volume_kind_stats (volume_id,scanned_at,kind,bytes_sum,count_sum) VALUES (?1,?2,?3,?4,?5)",
                     params![volume_id, now, k, b, c]).map_err(DbError::Sqlite)?;
@@ -419,16 +516,30 @@ pub fn run_scan(
     })?;
 
     stats.jobs_scheduled = jobs_scheduled;
-    emit(ScanEvent::PhaseComplete { scan_id, phase: "post_scan".into() });
+    emit(ScanEvent::PhaseComplete {
+        scan_id,
+        phase: "post_scan".into(),
+    });
 
     let duration_ms = start.elapsed().as_millis() as u64;
     stats.duration_ms = duration_ms;
     finalize_scan(db, scan_id, "completed", &stats, duration_ms)?;
-    emit(ScanEvent::Completed { scan_id, stats: stats.clone() });
+    emit(ScanEvent::Completed {
+        scan_id,
+        stats: stats.clone(),
+    });
 
-    log::info!("Scan #{} done in {}ms: {} files (+{} ~{} -{}) {} dirs | {} jobs",
-        scan_id, duration_ms, stats.files_total, stats.files_added, stats.files_modified,
-        stats.files_deleted, stats.dirs_total, stats.jobs_scheduled);
+    log::info!(
+        "Scan #{} done in {}ms: {} files (+{} ~{} -{}) {} dirs | {} jobs",
+        scan_id,
+        duration_ms,
+        stats.files_total,
+        stats.files_added,
+        stats.files_modified,
+        stats.files_deleted,
+        stats.dirs_total,
+        stats.jobs_scheduled
+    );
 
     Ok(stats)
 }
@@ -464,13 +575,24 @@ fn flush_batch(db: &Database, batch: &mut Vec<EntryUpsert>) -> ScanResult<()> {
     Ok(())
 }
 
-fn finalize_scan(db: &Database, scan_id: i64, status: &str, stats: &ScanStats, duration_ms: u64) -> ScanResult<()> {
+fn finalize_scan(
+    db: &Database,
+    scan_id: i64,
+    status: &str,
+    stats: &ScanStats,
+    duration_ms: u64,
+) -> ScanResult<()> {
     let now = current_timestamp();
     let s = status.to_string();
-    let (fa,fm,fd,ft,dt,bt,ec,dur) = (
-        stats.files_added as i64, stats.files_modified as i64, stats.files_deleted as i64,
-        stats.files_total as i64, stats.dirs_total as i64, stats.bytes_total as i64,
-        stats.errors as i64, duration_ms as i64,
+    let (fa, fm, fd, ft, dt, bt, ec, dur) = (
+        stats.files_added as i64,
+        stats.files_modified as i64,
+        stats.files_deleted as i64,
+        stats.files_total as i64,
+        stats.dirs_total as i64,
+        stats.bytes_total as i64,
+        stats.errors as i64,
+        duration_ms as i64,
     );
     db.write(move |conn| {
         conn.execute(
@@ -484,18 +606,32 @@ fn finalize_scan(db: &Database, scan_id: i64, status: &str, stats: &ScanStats, d
 
 fn build_entry(dir_entry: &DirEntry, volume_id: i64, now: i64) -> ScanResult<EntryUpsert> {
     let path = dir_entry.path();
-    let metadata = dir_entry.metadata().map_err(|e| ScanError::PathNotAccessible(e.to_string()))?;
+    let metadata = dir_entry
+        .metadata()
+        .map_err(|e| ScanError::PathNotAccessible(e.to_string()))?;
     let is_dir = metadata.is_dir();
     let full_path = path.to_string_lossy().to_string();
-    let parent = path.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let parent = path
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
 
-    let ext = if is_dir { None }
-        else { path.extension().map(|e| e.to_string_lossy().to_lowercase()) };
+    let ext = if is_dir {
+        None
+    } else {
+        path.extension().map(|e| e.to_string_lossy().to_lowercase())
+    };
 
     // Skip mime_guess: kind+ext is sufficient for the explorer. MIME can be derived on-demand.
-    let file_kind = if is_dir { "dir".to_string() }
-        else { kind::detect_kind(ext.as_deref(), None) };
+    let file_kind = if is_dir {
+        "dir".to_string()
+    } else {
+        kind::detect_kind(ext.as_deref(), None)
+    };
 
     let size = if is_dir { 0 } else { metadata.len() as i64 };
     let mtime = ts_from_systime(metadata.modified().ok());
@@ -503,14 +639,29 @@ fn build_entry(dir_entry: &DirEntry, volume_id: i64, now: i64) -> ScanResult<Ent
     let atime = ts_from_systime(metadata.accessed().ok());
 
     #[cfg(unix)]
-    let inode = { use std::os::unix::fs::MetadataExt; Some(metadata.ino().to_string()) };
+    let inode = {
+        use std::os::unix::fs::MetadataExt;
+        Some(metadata.ino().to_string())
+    };
     #[cfg(not(unix))]
     let inode: Option<String> = None;
 
     Ok(EntryUpsert {
-        volume_id, path: full_path, parent_path: parent, name, is_dir,
-        kind: file_kind, ext, mime: None, size_bytes: size,
-        mtime, ctime, atime, inode, device_id: None, last_seen_at: now,
+        volume_id,
+        path: full_path,
+        parent_path: parent,
+        name,
+        is_dir,
+        kind: file_kind,
+        ext,
+        mime: None,
+        size_bytes: size,
+        mtime,
+        ctime,
+        atime,
+        inode,
+        device_id: None,
+        last_seen_at: now,
     })
 }
 
@@ -520,9 +671,13 @@ fn should_exclude(entry: &DirEntry, exclusions: &[String]) -> bool {
 }
 
 fn current_timestamp() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }
 
 fn ts_from_systime(t: Option<SystemTime>) -> Option<i64> {
-    t.and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64)
+    t.and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
 }

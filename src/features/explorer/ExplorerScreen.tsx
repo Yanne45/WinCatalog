@@ -7,18 +7,20 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Box, Group, Stack, Text, Paper, ActionIcon, TextInput, Tooltip,
   ScrollArea, Skeleton, Badge, Divider, SegmentedControl, Button,
-  Breadcrumbs, Anchor, UnstyledButton,
+  Breadcrumbs, Anchor, UnstyledButton, Menu, Checkbox,
 } from '@mantine/core';
+import { modals } from '@mantine/modals';
+import { notifications } from '@mantine/notifications';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   IconArrowLeft, IconArrowRight, IconArrowUp, IconSearch,
   IconList, IconGridDots, IconInfoCircle, IconFolder, IconFile,
   IconChevronRight, IconChevronUp, IconChevronDown, IconX,
-  IconTag,
+  IconTag, IconTrash,
 } from '@tabler/icons-react';
 import {
-  volumeApi, entryApi, tagApi, searchApi, formatBytes, formatDate,
-  type Volume, type EntrySlim, type FileKind,
+  volumeApi, entryApi, tagApi, trashApi, searchApi, watchApi, formatBytes, formatDate,
+  type Volume, type EntrySlim, type FileKind, type SearchResult,
 } from '../../api/tauri';
 import { FILE_KIND_COLORS } from '../../app/theme';
 
@@ -82,10 +84,11 @@ function SortHeader({
 // ============================================================================
 
 function ListRow({
-  entry, selected, tags, onClick, onDoubleClick,
+  entry, selected, multiSelectActive, tags, hasDirty, onClick, onDoubleClick,
 }: {
-  entry: EntrySlim; selected: boolean; tags?: TagInfo[];
-  onClick: () => void; onDoubleClick: () => void;
+  entry: EntrySlim; selected: boolean; multiSelectActive: boolean; tags?: TagInfo[];
+  hasDirty?: boolean;
+  onClick: (e: React.MouseEvent) => void; onDoubleClick: () => void;
 }) {
   return (
     <UnstyledButton
@@ -99,10 +102,19 @@ function ListRow({
         backgroundColor: selected ? 'var(--mantine-color-primary-light)' : 'transparent',
       }}
     >
-      <FileIcon kind={entry.kind} isDir={entry.is_dir} />
+      {multiSelectActive
+        ? <Checkbox size="xs" checked={selected} onChange={() => {}} onClick={(e) => e.stopPropagation()} style={{ pointerEvents: 'none' }} />
+        : <FileIcon kind={entry.kind} isDir={entry.is_dir} />
+      }
       <Text size="sm" fw={entry.is_dir ? 500 : 400} style={{ flex: 1, minWidth: 0 }} lineClamp={1}>
         {entry.name}
       </Text>
+      {hasDirty && (
+        <Box
+          title="Nouveaux fichiers"
+          style={{ width: 7, height: 7, borderRadius: '50%', backgroundColor: 'var(--mantine-color-orange-5)', flexShrink: 0 }}
+        />
+      )}
       {/* Tags */}
       {tags && tags.length > 0 && (
         <Group gap={3} style={{ flexShrink: 0 }}>
@@ -128,9 +140,10 @@ function ListRow({
 // ============================================================================
 
 function GridCard({
-  entry, selected, onClick, onDoubleClick,
+  entry, selected, hasDirty, onClick, onDoubleClick,
 }: {
-  entry: EntrySlim; selected: boolean; onClick: () => void; onDoubleClick: () => void;
+  entry: EntrySlim; selected: boolean; hasDirty?: boolean;
+  onClick: (e: React.MouseEvent) => void; onDoubleClick: () => void;
 }) {
   const info = FILE_KIND_COLORS[entry.kind] ?? FILE_KIND_COLORS.other;
   return (
@@ -143,9 +156,19 @@ function GridCard({
         borderRadius: 'var(--mantine-radius-sm)',
         backgroundColor: selected ? 'var(--mantine-color-primary-light)' : 'transparent',
         border: `1px solid ${selected ? 'var(--mantine-color-primary-7)' : 'transparent'}`,
-        width: 120,
+        width: 120, position: 'relative',
       }}
     >
+      {hasDirty && (
+        <Box
+          title="Nouveaux fichiers"
+          style={{
+            position: 'absolute', top: 6, right: 6,
+            width: 7, height: 7, borderRadius: '50%',
+            backgroundColor: 'var(--mantine-color-orange-5)',
+          }}
+        />
+      )}
       <Box w={64} h={64} style={{ borderRadius: 'var(--mantine-radius-sm)', backgroundColor: 'var(--mantine-color-default)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         {entry.is_dir ? <IconFolder size={32} stroke={1} style={{ color: '#facc15' }} /> : <Text size="xl">{info.icon}</Text>}
       </Box>
@@ -244,6 +267,54 @@ function InspectorPanel({
 }
 
 // ============================================================================
+// Search results row (cross-folder search mode)
+// ============================================================================
+
+function SearchResultRow({
+  result, rootPath, selected, onClick,
+}: {
+  result: SearchResult; rootPath: string; selected: boolean; onClick: () => void;
+}) {
+  const info = FILE_KIND_COLORS[result.kind as FileKind] ?? FILE_KIND_COLORS.other;
+  const relativePath = result.path.startsWith(rootPath)
+    ? result.path.slice(rootPath.length).replace(/^[/\\]/, '')
+    : result.path;
+  // Show parent folder only (strip file name)
+  const sep = result.path.includes('\\') ? '\\' : '/';
+  const parentFolder = relativePath.includes(sep)
+    ? relativePath.slice(0, relativePath.lastIndexOf(sep))
+    : null;
+
+  return (
+    <UnstyledButton
+      w="100%" onClick={onClick} py={5} px="sm"
+      className="wc-hoverable"
+      data-active={selected || undefined}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        borderRadius: 'var(--mantine-radius-xs)',
+        backgroundColor: selected ? 'var(--mantine-color-primary-light)' : 'transparent',
+      }}
+    >
+      {result.is_dir
+        ? <IconFolder size={18} stroke={1.5} style={{ color: '#facc15', flexShrink: 0 }} />
+        : <IconFile size={18} stroke={1.5} style={{ color: info.color, flexShrink: 0 }} />}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <Text size="sm" fw={result.is_dir ? 500 : 400} lineClamp={1}>{result.name}</Text>
+        {parentFolder && (
+          <Text size="xs" c="dimmed" lineClamp={1} style={{ opacity: 0.7 }}>{parentFolder}</Text>
+        )}
+      </div>
+      {!result.is_dir && (
+        <Text size="xs" c="dimmed" w={70} ta="right" style={{ flexShrink: 0 }}>{formatBytes(result.size_bytes)}</Text>
+      )}
+      <Text size="xs" c="dimmed" w={50} ta="right" style={{ flexShrink: 0 }}>{result.ext ? `.${result.ext}` : (result.is_dir ? '' : '—')}</Text>
+      <Text size="xs" c="dimmed" w={120} ta="right" style={{ flexShrink: 0 }}>{formatDate(result.mtime)}</Text>
+    </UnstyledButton>
+  );
+}
+
+// ============================================================================
 // Breadcrumb
 // ============================================================================
 
@@ -281,17 +352,18 @@ function PathBreadcrumb({
 const ROW_HEIGHT = 34;
 
 function VirtualizedList({
-  entries, selectedId, entryTagsMap, allTags,
+  entries, selectedIds, entryTagsMap, allTags, dirtyEntryIds,
   sortField, sortDir, onSort, onSelect, onDoubleClick,
   hasMore, loadingMore, onLoadMore,
 }: {
   entries: EntrySlim[];
-  selectedId: number | null;
+  selectedIds: Set<number>;
   entryTagsMap: Map<number, TagInfo[]>;
   allTags: TagInfo[];
+  dirtyEntryIds: Set<number>;
   sortField: SortField; sortDir: SortDir;
   onSort: (field: SortField) => void;
-  onSelect: (id: number) => void;
+  onSelect: (id: number, idx: number, e: React.MouseEvent) => void;
   onDoubleClick: (entry: EntrySlim) => void;
   hasMore: boolean; loadingMore: boolean;
   onLoadMore: () => void;
@@ -347,9 +419,11 @@ function VirtualizedList({
               >
                 <ListRow
                   entry={entry}
-                  selected={selectedId === entry.id}
+                  selected={selectedIds.has(entry.id)}
+                  multiSelectActive={selectedIds.size > 1}
                   tags={entryTagsMap.get(entry.id)}
-                  onClick={() => onSelect(entry.id)}
+                  hasDirty={dirtyEntryIds.has(entry.id)}
+                  onClick={(e) => onSelect(entry.id, virtualRow.index, e)}
                   onDoubleClick={() => onDoubleClick(entry)}
                 />
               </div>
@@ -389,7 +463,10 @@ export default function ExplorerScreen({
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const PAGE_SIZE = 200;
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const lastSelectedIdxRef = useRef<number>(-1);
+  // Watch-mode badging: paths of directories that contain unseen changes
+  const [dirtyDirIds, setDirtyDirIds] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [showInspector, setShowInspector] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -425,14 +502,40 @@ export default function ExplorerScreen({
     });
   }, [initialVolumeId, initialPath]);
 
+  // Watch-mode: subscribe to fs change events and track dirty directories
+  useEffect(() => {
+    if (!activeVolume) return;
+    let unlisten: (() => void) | null = null;
+
+    // Start watching (no-op if already running)
+    watchApi.start(activeVolume.id).catch(() => {});
+
+    watchApi.onEvent((evt) => {
+      if (evt.type !== 'Change' || evt.volume_id !== activeVolume.id) return;
+      if (!evt.paths || evt.paths.length === 0) return;
+      setDirtyDirIds((prev) => {
+        const next = new Set(prev);
+        for (const p of evt.paths!) {
+          const lastSlash = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+          if (lastSlash > 0) next.add(p.slice(0, lastSlash));
+        }
+        return next;
+      });
+    }).then((fn) => { unlisten = fn; });
+
+    return () => { unlisten?.(); };
+  }, [activeVolume]);
+
   // Load entries when path changes
   useEffect(() => {
     if (!activeVolume || !currentPath) return;
     let cancelled = false;
     setLoading(true);
-    setSelectedId(null);
+    setSelectedIds(new Set());
     setFilterTagId(null);
     setHasMore(false);
+    // Clear stale tags from previous path to avoid leaking memory across navigations
+    entryTagsMapRef.current = new Map();
     entryApi.list(activeVolume.id, currentPath, undefined, PAGE_SIZE).then((data) => {
       if (!cancelled) {
         setEntries(data);
@@ -642,10 +745,20 @@ export default function ExplorerScreen({
   const handleDoubleClick = useCallback((entry: EntrySlim) => {
     if (entry.is_dir) {
       const sep = currentPath.includes('\\') ? '\\' : '/';
-      navigateTo(currentPath.endsWith(sep) ? currentPath + entry.name : currentPath + sep + entry.name);
+      const newPath = currentPath.endsWith(sep) ? currentPath + entry.name : currentPath + sep + entry.name;
+      // Clear dirty badge for this folder when navigating into it
+      setDirtyDirIds((prev) => {
+        if (!prev.has(newPath)) return prev;
+        const next = new Set(prev);
+        next.delete(newPath);
+        return next;
+      });
+      navigateTo(newPath);
     }
   }, [currentPath, navigateTo]);
 
+  // Inspector shows detail only for single selection
+  const selectedId = selectedIds.size === 1 ? [...selectedIds][0] : null;
   const selectedEntry = useMemo(() => entries.find((e) => e.id === selectedId) ?? null, [entries, selectedId]);
   const selectedEntryTags = useMemo(() => selectedId ? (entryTagsMap.get(selectedId) ?? []) : [], [selectedId, entryTagsMap]);
 
@@ -673,67 +786,162 @@ export default function ExplorerScreen({
 
   // FTS5 search: debounced query for 3+ chars
   const [ftsResultIds, setFtsResultIds] = useState<Set<number> | null>(null);
+  // Full scoped search results (cross-folder, shown when searchQuery >= 3 chars)
+  const [ftsFullResults, setFtsFullResults] = useState<SearchResult[] | null>(null);
   const ftsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (ftsTimerRef.current) clearTimeout(ftsTimerRef.current);
 
     if (searchQuery.length < 3) {
-      setFtsResultIds(null); // Use local filter
+      setFtsResultIds(null);
+      setFtsFullResults(null);
       return;
     }
 
+    const volumeId = activeVolume?.id;
+    // When inside a subfolder (not the volume root), scope to current path subtree.
+    const pathPrefix = activeVolume && currentPath !== activeVolume.root_path ? currentPath : undefined;
+
     ftsTimerRef.current = setTimeout(async () => {
       try {
-        const results = await searchApi.entries(searchQuery, 500);
+        const results = await searchApi.entries(searchQuery, 500, volumeId, pathPrefix);
         setFtsResultIds(new Set(results.map((r) => r.id)));
+        setFtsFullResults(results);
       } catch {
-        setFtsResultIds(null); // Fallback to local filter
+        setFtsResultIds(null);
+        setFtsFullResults(null);
       }
     }, 300);
 
     return () => { if (ftsTimerRef.current) clearTimeout(ftsTimerRef.current); };
-  }, [searchQuery]);
+  }, [searchQuery, activeVolume, currentPath]);
 
-  // Filter by search query + tag
+  // Filter by search query — re-runs only when search/FTS changes, not on every tag update
+  const searchFilteredEntries = useMemo(() => {
+    if (!searchQuery) return sortedEntries;
+    if (ftsResultIds != null) {
+      return sortedEntries.filter((e) => ftsResultIds.has(e.id));
+    }
+    const q = searchQuery.toLowerCase();
+    return sortedEntries.filter((e) => e.name.toLowerCase().includes(q));
+  }, [sortedEntries, searchQuery, ftsResultIds]);
+
+  // Filter by tag — separate memo so tag map updates don't re-run the search filter
   const filteredEntries = useMemo(() => {
-    let result = sortedEntries;
-    if (searchQuery) {
-      if (ftsResultIds != null) {
-        // FTS5 result filtering (3+ chars)
-        result = result.filter((e) => ftsResultIds.has(e.id));
-      } else {
-        // Local filter (1-2 chars)
-        const q = searchQuery.toLowerCase();
-        result = result.filter((e) => e.name.toLowerCase().includes(q));
+    if (filterTagId == null) return searchFilteredEntries;
+    return searchFilteredEntries.filter((e) => {
+      const tags = entryTagsMap.get(e.id);
+      return tags?.some((t) => t.id === filterTagId);
+    });
+  }, [searchFilteredEntries, filterTagId, entryTagsMap]);
+
+  // Dirty entry IDs: folders whose subtree has unseen watch changes
+  const dirtyEntryIds = useMemo(() => {
+    if (dirtyDirIds.size === 0) return new Set<number>();
+    const sep = currentPath.includes('\\') ? '\\' : '/';
+    const result = new Set<number>();
+    for (const entry of entries) {
+      if (!entry.is_dir) continue;
+      const fullPath = currentPath.endsWith(sep) || currentPath.endsWith('/')
+        ? currentPath + entry.name
+        : currentPath + sep + entry.name;
+      for (const dp of dirtyDirIds) {
+        if (dp === fullPath || dp.startsWith(fullPath + '/') || dp.startsWith(fullPath + '\\')) {
+          result.add(entry.id);
+          break;
+        }
       }
     }
-    if (filterTagId != null) {
-      result = result.filter((e) => {
-        const tags = entryTagsMap.get(e.id);
-        return tags?.some((t) => t.id === filterTagId);
-      });
-    }
     return result;
-  }, [sortedEntries, searchQuery, ftsResultIds, filterTagId, entryTagsMap]);
+  }, [entries, dirtyDirIds, currentPath]);
+
+  // Multi-select click handler (declared after filteredEntries)
+  const handleRowClick = useCallback((id: number, idx: number, e: React.MouseEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+      });
+    } else if (e.shiftKey && lastSelectedIdxRef.current >= 0) {
+      const start = Math.min(lastSelectedIdxRef.current, idx);
+      const end = Math.max(lastSelectedIdxRef.current, idx);
+      const rangeIds = filteredEntries.slice(start, end + 1).map((en) => en.id);
+      setSelectedIds((prev) => new Set([...prev, ...rangeIds]));
+    } else {
+      setSelectedIds(new Set([id]));
+      lastSelectedIdxRef.current = idx;
+    }
+  }, [filteredEntries]);
+
+  // Batch: trash selected
+  const handleBatchTrash = useCallback(() => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    modals.openConfirmModal({
+      title: 'Envoyer à la corbeille',
+      children: <Text size="sm">Envoyer {ids.length} élément{ids.length > 1 ? 's' : ''} à la corbeille ?</Text>,
+      labels: { confirm: 'Envoyer', cancel: 'Annuler' },
+      confirmProps: { color: 'red' },
+      onConfirm: async () => {
+        const idsSet = new Set(ids);
+        let errors = 0;
+        for (const id of ids) {
+          try { await trashApi.trash(id, 'user'); }
+          catch { errors++; }
+        }
+        setSelectedIds(new Set());
+        setEntries((prev) => prev.filter((e) => !idsSet.has(e.id)));
+        if (errors > 0) {
+          notifications.show({ title: 'Erreur partielle', message: `${errors} élément(s) non supprimé(s).`, color: 'orange' });
+        } else {
+          notifications.show({ title: `${ids.length} élément${ids.length > 1 ? 's' : ''} supprimé${ids.length > 1 ? 's' : ''}`, message: 'Éléments envoyés à la corbeille.', color: 'green' });
+        }
+      },
+    });
+  }, [selectedIds]);
+
+  // Batch: tag selected entries
+  const handleBatchTag = useCallback(async (tagId: number) => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    let ok = 0;
+    for (const id of ids) {
+      try { await tagApi.tagEntry(id, tagId); ok++; }
+      catch { /* ignore */ }
+    }
+    notifications.show({ title: 'Tags appliqués', message: `Tag ajouté à ${ok} élément${ok > 1 ? 's' : ''}.`, color: 'green' });
+  }, [selectedIds]);
 
   // Keyboard navigation
   const containerRef = useRef<HTMLDivElement>(null);
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (filteredEntries.length === 0) return;
-    const currentIdx = filteredEntries.findIndex((entry) => entry.id === selectedId);
+    const currentIdx = filteredEntries.findIndex((entry) => selectedIds.has(entry.id));
+
+    // Ctrl+A — select all
+    if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+      e.preventDefault();
+      setSelectedIds(new Set(filteredEntries.map((en) => en.id)));
+      return;
+    }
+    // Escape — clear selection
+    if (e.key === 'Escape') { setSelectedIds(new Set()); return; }
 
     switch (e.key) {
       case 'ArrowDown': {
         e.preventDefault();
         const nextIdx = currentIdx < filteredEntries.length - 1 ? currentIdx + 1 : 0;
-        setSelectedId(filteredEntries[nextIdx].id);
+        setSelectedIds(new Set([filteredEntries[nextIdx].id]));
+        lastSelectedIdxRef.current = nextIdx;
         break;
       }
       case 'ArrowUp': {
         e.preventDefault();
         const prevIdx = currentIdx > 0 ? currentIdx - 1 : filteredEntries.length - 1;
-        setSelectedId(filteredEntries[prevIdx].id);
+        setSelectedIds(new Set([filteredEntries[prevIdx].id]));
+        lastSelectedIdxRef.current = prevIdx;
         break;
       }
       case 'Enter': {
@@ -749,7 +957,7 @@ export default function ExplorerScreen({
         break;
       }
     }
-  }, [filteredEntries, selectedId, handleDoubleClick, goUp]);
+  }, [filteredEntries, selectedIds, handleDoubleClick, goUp]);
 
   return (
     <Box h="100%" style={{ display: 'flex', flexDirection: 'column' }} tabIndex={0} onKeyDown={handleKeyDown} ref={containerRef}>
@@ -796,18 +1004,75 @@ export default function ExplorerScreen({
       {/* Status bar */}
       <Box px="sm" py={3} style={{ borderBottom: '1px solid var(--mantine-color-default-border)', flexShrink: 0 }}>
         <Text size="xs" c="dimmed">
-          {dirCount} dossiers, {fileCount} fichiers
-          {hasMore && '+'}
-          {' • '}{formatBytes(totalSize)}
-          {selectedId != null && ' • 1 sélectionné'}
+          {ftsFullResults != null
+            ? `${ftsFullResults.length} résultat${ftsFullResults.length !== 1 ? 's' : ''} dans ${activeVolume && currentPath !== activeVolume.root_path ? currentPath.split(/[/\\]/).pop() : activeVolume?.label ?? 'volume'}`
+            : `${dirCount} dossiers, ${fileCount} fichiers${hasMore ? '+' : ''} • ${formatBytes(totalSize)}`
+          }
+          {selectedIds.size > 0 && ` • ${selectedIds.size} sélectionné${selectedIds.size > 1 ? 's' : ''}`}
           {filterTagId != null && ' • filtré par tag'}
         </Text>
       </Box>
+
+      {/* Batch action bar */}
+      {selectedIds.size > 1 && (
+        <Box px="sm" py={5} style={{ borderBottom: '1px solid var(--mantine-color-default-border)', backgroundColor: 'var(--mantine-color-primary-light)', flexShrink: 0 }}>
+          <Group justify="space-between">
+            <Text size="xs" fw={500} c="primary">{selectedIds.size} éléments sélectionnés</Text>
+            <Group gap="xs">
+              <Button size="xs" variant="subtle" color="gray" onClick={() => setSelectedIds(new Set())}>
+                Désélectionner
+              </Button>
+              <Menu shadow="md" width={180}>
+                <Menu.Target>
+                  <Button size="xs" variant="light" leftSection={<IconTag size={12} />}>Tagger</Button>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  {allTags.length === 0
+                    ? <Menu.Item disabled>Aucun tag</Menu.Item>
+                    : allTags.map((t) => (
+                      <Menu.Item key={t.id} leftSection={<Box w={8} h={8} style={{ borderRadius: 2, backgroundColor: t.color ?? '#64748b' }} />}
+                        onClick={() => handleBatchTag(t.id)}>
+                        {t.name}
+                      </Menu.Item>
+                    ))
+                  }
+                </Menu.Dropdown>
+              </Menu>
+              <Button size="xs" variant="light" color="red" leftSection={<IconTrash size={12} />} onClick={handleBatchTrash}>
+                Corbeille
+              </Button>
+            </Group>
+          </Group>
+        </Box>
+      )}
 
       {/* Content area */}
       <Box style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         {loading ? (
           <Stack p="sm" gap={4} style={{ flex: 1 }}>{Array.from({ length: 20 }).map((_, i) => <Skeleton key={i} height={32} />)}</Stack>
+        ) : ftsFullResults != null ? (
+          /* ── Cross-folder search results mode ── */
+          ftsFullResults.length === 0 ? (
+            <Box ta="center" py={60} style={{ flex: 1 }}>
+              <IconSearch size={40} stroke={1} style={{ color: 'var(--mantine-color-dimmed)', marginBottom: 8 }} />
+              <Text size="sm" c="dimmed">Aucun résultat pour « {searchQuery} »</Text>
+              <Button variant="subtle" size="xs" mt="sm" onClick={() => setSearchQuery('')}>Effacer la recherche</Button>
+            </Box>
+          ) : (
+            <ScrollArea style={{ flex: 1 }} type="auto">
+              <Stack gap={0} p="xs">
+                {ftsFullResults.map((r) => (
+                  <SearchResultRow
+                    key={r.id}
+                    result={r}
+                    rootPath={activeVolume?.root_path ?? ''}
+                    selected={selectedIds.has(r.id)}
+                    onClick={() => setSelectedIds(new Set([r.id]))}
+                  />
+                ))}
+              </Stack>
+            </ScrollArea>
+          )
         ) : filteredEntries.length === 0 ? (
           <Box ta="center" py={60} style={{ flex: 1 }}>
             <IconFolder size={40} stroke={1} style={{ color: 'var(--mantine-color-dimmed)', marginBottom: 8 }} />
@@ -825,13 +1090,14 @@ export default function ExplorerScreen({
         ) : viewMode === 'list' ? (
           <VirtualizedList
             entries={filteredEntries}
-            selectedId={selectedId}
+            selectedIds={selectedIds}
             entryTagsMap={entryTagsMap}
             allTags={allTags}
+            dirtyEntryIds={dirtyEntryIds}
             sortField={sortField}
             sortDir={sortDir}
             onSort={handleSort}
-            onSelect={setSelectedId}
+            onSelect={handleRowClick}
             onDoubleClick={handleDoubleClick}
             hasMore={hasMore}
             loadingMore={loadingMore}
@@ -845,9 +1111,10 @@ export default function ExplorerScreen({
             onScrollPositionChange={handleGridScroll}
           >
             <Group gap="xs" p="md" align="flex-start" style={{ flexWrap: 'wrap' }}>
-              {filteredEntries.map((entry) => (
-                <GridCard key={entry.id} entry={entry} selected={selectedId === entry.id}
-                  onClick={() => setSelectedId(entry.id)} onDoubleClick={() => handleDoubleClick(entry)} />
+              {filteredEntries.map((entry, idx) => (
+                <GridCard key={entry.id} entry={entry} selected={selectedIds.has(entry.id)}
+                  hasDirty={dirtyEntryIds.has(entry.id)}
+                  onClick={(e) => handleRowClick(entry.id, idx, e)} onDoubleClick={() => handleDoubleClick(entry)} />
               ))}
             </Group>
             {hasMore && !loading && (

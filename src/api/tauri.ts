@@ -50,6 +50,7 @@ export type FileKind =
 export interface SearchResult {
   id: number; name: string; path: string; kind: FileKind;
   size_bytes: number; volume_id: number; rank: number;
+  is_dir: boolean; ext: string | null; mtime: number | null;
 }
 
 export interface Job {
@@ -106,7 +107,12 @@ export const entryApi = {
 };
 
 export const searchApi = {
-  entries: (query: string, limit = 50) => invoke<SearchResult[]>('search', { query, limit }),
+  entries: (query: string, limit = 50, volumeId?: number, pathPrefix?: string) =>
+    invoke<SearchResult[]>('search', {
+      query, limit,
+      volumeId: volumeId ?? null,
+      pathPrefix: pathPrefix ?? null,
+    }),
   content: (query: string, limit = 50) => invoke<SearchResult[]>('search_content', { query, limit }),
 };
 
@@ -230,6 +236,52 @@ export const trashApi = {
 };
 
 export const diagnosticsApi = { getDb: () => invoke<PragmaDiagnostics>('get_db_diagnostics') };
+
+export const maintenanceApi = {
+  optimizeDb: () => invoke<void>('optimize_db'),
+  clearThumbCache: () => invoke<number>('clear_thumb_cache'),
+  resetIndex: () => invoke<number>('reset_index'),
+};
+
+// ============================================================================
+// Typed metadata API (Inspector)
+// ============================================================================
+
+export interface MetaImage {
+  width: number | null; height: number | null; orientation: number | null;
+  color_space: string | null; camera_make: string | null; camera_model: string | null;
+  iso: number | null; focal_length: number | null; aperture: number | null;
+  shutter_speed: string | null; gps_lat: number | null; gps_lon: number | null;
+  taken_at: number | null;
+}
+
+export interface MetaAudio {
+  duration_ms: number | null; artist: string | null; album: string | null;
+  title: string | null; track_number: number | null; genre: string | null;
+  year: number | null; bitrate: number | null; sample_rate: number | null; channels: number | null;
+}
+
+export interface MetaVideo {
+  duration_ms: number | null; width: number | null; height: number | null;
+  fps: number | null; video_codec: string | null; audio_codec: string | null;
+  bitrate: number | null; container: string | null;
+}
+
+export interface MetaDocument {
+  format: string | null; page_count: number | null; title: string | null; author: string | null;
+}
+
+export interface AiAnnotationRow {
+  kind: string; value: string; confidence: number | null; source: string;
+}
+
+export const metaApi = {
+  getImageMeta: (entryId: number) => invoke<MetaImage | null>('get_image_meta', { entryId }),
+  getAudioMeta: (entryId: number) => invoke<MetaAudio | null>('get_audio_meta', { entryId }),
+  getVideoMeta: (entryId: number) => invoke<MetaVideo | null>('get_video_meta', { entryId }),
+  getDocMeta: (entryId: number) => invoke<MetaDocument | null>('get_doc_meta', { entryId }),
+  getAiAnnotations: (entryId: number) => invoke<AiAnnotationRow[]>('get_ai_annotations', { entryId }),
+};
 
 // ============================================================================
 // Dashboard API

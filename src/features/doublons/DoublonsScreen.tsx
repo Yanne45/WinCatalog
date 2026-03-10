@@ -9,6 +9,7 @@ import {
   ScrollArea, Skeleton, Divider, ActionIcon, Tooltip, Alert,
   Select, NumberInput, Progress,
 } from '@mantine/core';
+import { modals } from '@mantine/modals';
 import {
   IconCopy, IconTrash, IconCheck, IconRefresh, IconChevronRight,
   IconFile, IconFolder, IconAlertTriangle, IconArrowRight,
@@ -301,9 +302,11 @@ export default function DoublonsScreen({ onNavigate }: { onNavigate?: (screen: s
           if (entries.length < 2) continue;
           const sorted = [...entries].sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
           const kept = new Set<number>([sorted[0].id]);
+          // reclaimable = total − taille d'une copie conservée (sorted[0], le plus récent)
+          const keptSize = sorted[0]?.size_bytes ?? 0;
           loaded.push({
             hash, count: entries.length, totalBytes,
-            reclaimable: totalBytes - (entries[0]?.size_bytes ?? 0),
+            reclaimable: totalBytes - keptSize,
             entries, kept, resolved: false,
           });
         }
@@ -363,29 +366,38 @@ export default function DoublonsScreen({ onNavigate }: { onNavigate?: (screen: s
   }, [activeGroup]);
 
   // Apply: send to trash
-  const applyDeletion = useCallback(async () => {
+  const applyDeletion = useCallback(() => {
     if (!activeGroup) return;
     const toDelete = activeGroup.entries.filter((e) => !activeGroup.kept.has(e.id));
     if (toDelete.length === 0) return;
-    if (!window.confirm(`Envoyer ${toDelete.length} fichier${toDelete.length > 1 ? 's' : ''} à la corbeille ?`)) return;
-    setApplying(true);
-    try {
-      for (const entry of toDelete) {
-        await trashApi.trash(entry.id, 'duplicate');
-      }
-      // Mark as resolved
-      const hash = activeGroup.hash;
-      setGroups((prev) => prev.map((g) =>
-        g.hash === hash ? { ...g, resolved: true } : g
-      ));
-      // Move to next unresolved group
-      const nextIdx = sortedGroups.findIndex((g, i) => i > activeGroupIdx && !g.resolved);
-      if (nextIdx >= 0) setActiveGroupIdx(nextIdx);
-    } catch (err) {
-      console.error('Trash failed:', err);
-    } finally {
-      setApplying(false);
-    }
+    const { hash } = activeGroup;
+    modals.openConfirmModal({
+      title: 'Envoyer à la corbeille',
+      children: (
+        <Text size="sm">
+          Envoyer {toDelete.length} fichier{toDelete.length > 1 ? 's' : ''} à la corbeille ?
+        </Text>
+      ),
+      labels: { confirm: 'Envoyer', cancel: 'Annuler' },
+      confirmProps: { color: 'red' },
+      onConfirm: async () => {
+        setApplying(true);
+        try {
+          for (const entry of toDelete) {
+            await trashApi.trash(entry.id, 'duplicate');
+          }
+          setGroups((prev) => prev.map((g) =>
+            g.hash === hash ? { ...g, resolved: true } : g
+          ));
+          const nextIdx = sortedGroups.findIndex((g, i) => i > activeGroupIdx && !g.resolved);
+          if (nextIdx >= 0) setActiveGroupIdx(nextIdx);
+        } catch (err) {
+          console.error('Trash failed:', err);
+        } finally {
+          setApplying(false);
+        }
+      },
+    });
   }, [activeGroup, activeGroupIdx, sortedGroups]);
 
   // Summary stats

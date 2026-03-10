@@ -28,7 +28,11 @@ use crate::db::{Database, DbResult};
 #[serde(tag = "type")]
 pub enum VolumeEvent {
     /// A volume came back online
-    Online { volume_id: i64, label: String, root_path: String },
+    Online {
+        volume_id: i64,
+        label: String,
+        root_path: String,
+    },
     /// A volume went offline
     Offline { volume_id: i64, label: String },
     /// Initial status report after startup check
@@ -200,18 +204,20 @@ fn watcher_loop(
 fn load_volumes(db: &Database) -> DbResult<Vec<VolumeInfo>> {
     db.read(|conn| {
         let mut stmt = conn.prepare_cached(
-            "SELECT id, label, root_path, fs_uuid, is_online, auto_detect FROM volumes"
+            "SELECT id, label, root_path, fs_uuid, is_online, auto_detect FROM volumes",
         )?;
-        let rows = stmt.query_map([], |r| {
-            Ok(VolumeInfo {
-                id: r.get(0)?,
-                label: r.get(1)?,
-                root_path: r.get(2)?,
-                _fs_uuid: r.get(3)?,
-                is_online: r.get::<_, i32>(4)? != 0,
-                _auto_detect: r.get::<_, i32>(5)? != 0,
-            })
-        })?.filter_map(|r| r.ok()).collect();
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(VolumeInfo {
+                    id: r.get(0)?,
+                    label: r.get(1)?,
+                    root_path: r.get(2)?,
+                    _fs_uuid: r.get(3)?,
+                    is_online: r.get::<_, i32>(4)? != 0,
+                    _auto_detect: r.get::<_, i32>(5)? != 0,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     })
 }

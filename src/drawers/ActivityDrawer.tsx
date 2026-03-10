@@ -99,9 +99,22 @@ export default function ActivityDrawer({ opened, onClose }: ActivityDrawerProps)
     poll();
     const interval = setInterval(poll, 1500);
 
-    jobApi.onEvent(() => { poll(); }).then((ul) => { unlistenRef.current = ul; });
+    // Guard against the race where cleanup fires before the Promise resolves:
+    // if active is already false when the unlisten fn arrives, call it immediately.
+    jobApi.onEvent(() => { if (active) poll(); }).then((ul) => {
+      if (active) {
+        unlistenRef.current = ul;
+      } else {
+        ul(); // drawer already closed — unlisten right away
+      }
+    });
 
-    return () => { active = false; clearInterval(interval); unlistenRef.current?.(); };
+    return () => {
+      active = false;
+      clearInterval(interval);
+      unlistenRef.current?.();
+      unlistenRef.current = null;
+    };
   }, [opened]);
 
   const running = jobs.filter((j) => j.status === 'running');

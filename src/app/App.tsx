@@ -3,10 +3,10 @@
 // AppShell + layout + real screens
 // ============================================================================
 
-import { useState, useCallback, useMemo } from 'react';
+import { lazy, Suspense, useState, useCallback, useMemo, useEffect } from 'react';
 import {
   AppShell, Group, Text, ActionIcon, TextInput, Tooltip, Badge,
-  UnstyledButton, Stack, Divider, Box, Kbd,
+  UnstyledButton, Stack, Divider, Box, Kbd, Loader,
   useMantineColorScheme, ScrollArea, Burger,
 } from '@mantine/core';
 import { useHotkeys } from '@mantine/hooks';
@@ -15,12 +15,12 @@ import {
   IconRefresh, IconCopy, IconTag, IconSettings,
 } from '@tabler/icons-react';
 
-import DashboardScreen from '../features/dashboard/DashboardScreen';
-import ExplorerScreen from '../features/explorer/ExplorerScreen';
-import ScanScreen from '../features/scan/ScanScreen';
-import DoublonsScreen from '../features/doublons/DoublonsScreen';
-import SettingsScreen from '../features/settings/SettingsScreen';
-import TagsScreen from '../features/tags/TagsScreen';
+const DashboardScreen = lazy(() => import('../features/dashboard/DashboardScreen'));
+const ExplorerScreen = lazy(() => import('../features/explorer/ExplorerScreen'));
+const ScanScreen = lazy(() => import('../features/scan/ScanScreen'));
+const DoublonsScreen = lazy(() => import('../features/doublons/DoublonsScreen'));
+const SettingsScreen = lazy(() => import('../features/settings/SettingsScreen'));
+const TagsScreen = lazy(() => import('../features/tags/TagsScreen'));
 import StatusBar from '../components/StatusBar';
 import CommandPalette from '../modals/CommandPalette';
 
@@ -179,15 +179,16 @@ export default function App() {
   const [visitedScreens, setVisitedScreens] = useState<Set<Screen>>(new Set(['dashboard']));
 
   // When activeScreen changes, add it to visited set
-  const visited = useMemo(() => {
-    if (!visitedScreens.has(activeScreen)) {
-      const next = new Set(visitedScreens);
+  useEffect(() => {
+    setVisitedScreens((prev) => {
+      if (prev.has(activeScreen)) return prev;
+      const next = new Set(prev);
       next.add(activeScreen);
-      setVisitedScreens(next);
       return next;
-    }
-    return visitedScreens;
-  }, [activeScreen, visitedScreens]);
+    });
+  }, [activeScreen]);
+
+  const visited = useMemo(() => visitedScreens, [visitedScreens]);
 
   const screenStyle = (screen: Screen): React.CSSProperties => ({
     display: activeScreen === screen ? 'contents' : 'none',
@@ -221,36 +222,38 @@ export default function App() {
 
         <AppShell.Main>
           {/* Persistent screens: mounted once, hidden via CSS to preserve state */}
-          <div style={screenStyle('dashboard')}>
-            {visited.has('dashboard') && <DashboardScreen onNavigate={handleNavigate} />}
-          </div>
-          <div style={screenStyle('explorer')}>
-            {visited.has('explorer') && (
-              <ExplorerScreen
-                initialVolumeId={navContext.volumeId}
-                initialPath={navContext.path}
-                onNavigateApp={handleNavigate}
-              />
-            )}
-          </div>
-          <div style={screenStyle('scan')}>
-            {visited.has('scan') && (
-              <ScanScreen
-                initialVolumeId={navContext.volumeId}
-                initialMode={navContext.mode}
-                onNavigate={handleNavigate}
-              />
-            )}
-          </div>
-          <div style={screenStyle('doublons')}>
-            {visited.has('doublons') && <DoublonsScreen onNavigate={handleNavigate} />}
-          </div>
-          <div style={screenStyle('tags')}>
-            {visited.has('tags') && <TagsScreen />}
-          </div>
-          <div style={screenStyle('settings')}>
-            {visited.has('settings') && <SettingsScreen />}
-          </div>
+          <Suspense fallback={<ScreenLoader />}>
+            <div style={screenStyle('dashboard')}>
+              {visited.has('dashboard') && <DashboardScreen onNavigate={handleNavigate} />}
+            </div>
+            <div style={screenStyle('explorer')}>
+              {visited.has('explorer') && (
+                <ExplorerScreen
+                  initialVolumeId={navContext.volumeId}
+                  initialPath={navContext.path}
+                  onNavigateApp={handleNavigate}
+                />
+              )}
+            </div>
+            <div style={screenStyle('scan')}>
+              {visited.has('scan') && (
+                <ScanScreen
+                  initialVolumeId={navContext.volumeId}
+                  initialMode={navContext.mode}
+                  onNavigate={handleNavigate}
+                />
+              )}
+            </div>
+            <div style={screenStyle('doublons')}>
+              {visited.has('doublons') && <DoublonsScreen onNavigate={handleNavigate} />}
+            </div>
+            <div style={screenStyle('tags')}>
+              {visited.has('tags') && <TagsScreen />}
+            </div>
+            <div style={screenStyle('settings')}>
+              {visited.has('settings') && <SettingsScreen />}
+            </div>
+          </Suspense>
         </AppShell.Main>
 
         <AppShell.Footer>
@@ -264,5 +267,14 @@ export default function App() {
         onNavigate={handleNavigate}
       />
     </>
+  );
+}
+
+function ScreenLoader() {
+  return (
+    <Group justify="center" align="center" h="100%" py="xl">
+      <Loader size="sm" />
+      <Text size="sm" c="dimmed">Chargement de l'écran…</Text>
+    </Group>
   );
 }

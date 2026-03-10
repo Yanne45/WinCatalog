@@ -15,8 +15,8 @@ use thiserror::Error;
 use crate::db::{Database, DbError};
 
 const QUICK_HASH_SIZE: usize = 65_536; // 64 KB
-const HASH_BUF_SIZE: usize = 1 << 16;  // 64 KB read buffer
-const BATCH_WRITE_SIZE: usize = 50;     // entries per DB write batch
+const HASH_BUF_SIZE: usize = 1 << 16; // 64 KB read buffer
+const BATCH_WRITE_SIZE: usize = 50; // entries per DB write batch
 
 #[derive(Error, Debug)]
 pub enum HashError {
@@ -52,7 +52,9 @@ pub fn full_hash_file(path: &Path) -> HashResult<String> {
     let mut buf = [0u8; HASH_BUF_SIZE];
     loop {
         let n = reader.read(&mut buf)?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         hasher.update(&buf[..n]);
     }
     Ok(hasher.finalize().to_hex().to_string())
@@ -65,10 +67,26 @@ pub fn full_hash_file(path: &Path) -> HashResult<String> {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type")]
 pub enum HashEvent {
-    Started { volume_id: i64, total_files: u64, mode: String },
-    Progress { volume_id: i64, files_hashed: u64, bytes_processed: u64, current_file: String },
-    FileError { volume_id: i64, path: String, error: String },
-    Completed { volume_id: i64, stats: HashStats },
+    Started {
+        volume_id: i64,
+        total_files: u64,
+        mode: String,
+    },
+    Progress {
+        volume_id: i64,
+        files_hashed: u64,
+        bytes_processed: u64,
+        current_file: String,
+    },
+    FileError {
+        volume_id: i64,
+        path: String,
+        error: String,
+    },
+    Completed {
+        volume_id: i64,
+        stats: HashStats,
+    },
 }
 
 pub type EventCallback = Box<dyn Fn(HashEvent) + Send>;
@@ -100,7 +118,11 @@ pub fn run_hash(
 ) -> HashResult<HashStats> {
     let start = Instant::now();
     let do_full = mode == "full";
-    let emit = |e: HashEvent| { if let Some(ref cb) = on_event { cb(e); } };
+    let emit = |e: HashEvent| {
+        if let Some(ref cb) = on_event {
+            cb(e);
+        }
+    };
 
     // Load files needing hash, sorted by size DESC (big files first = more dedup gain)
     let files: Vec<(i64, String, i64)> = db.read(|conn| {
@@ -109,18 +131,30 @@ pub fn run_hash(
              WHERE volume_id=?1 AND status='present' AND is_dir=0 AND quick_hash IS NULL AND size_bytes >= ?2
              ORDER BY size_bytes DESC"
         )?;
-        let rows = stmt.query_map(params![volume_id, min_size], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-        })?.filter_map(|r| r.ok()).collect();
+        let rows = stmt
+            .query_map(params![volume_id, min_size], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     })?;
 
     let total = files.len() as u64;
-    emit(HashEvent::Started { volume_id, total_files: total, mode: mode.into() });
+    emit(HashEvent::Started {
+        volume_id,
+        total_files: total,
+        mode: mode.into(),
+    });
 
     if total == 0 {
-        let stats = HashStats { duration_ms: start.elapsed().as_millis() as u64, ..Default::default() };
-        emit(HashEvent::Completed { volume_id, stats: stats.clone() });
+        let stats = HashStats {
+            duration_ms: start.elapsed().as_millis() as u64,
+            ..Default::default()
+        };
+        emit(HashEvent::Completed {
+            volume_id,
+            stats: stats.clone(),
+        });
         return Ok(stats);
     }
 
@@ -129,7 +163,9 @@ pub fn run_hash(
 
     for (entry_id, path, size) in &files {
         // Cancellation check
-        if cancel.try_recv().is_ok() { return Err(HashError::Canceled); }
+        if cancel.try_recv().is_ok() {
+            return Err(HashError::Canceled);
+        }
 
         let p = Path::new(path);
         if !p.exists() {
@@ -148,13 +184,20 @@ pub fn run_hash(
                         volume_id,
                         files_hashed: stats.files_hashed,
                         bytes_processed: stats.bytes_processed,
-                        current_file: p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                        current_file: p
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default(),
                     });
                 }
             }
             Err(e) => {
                 stats.files_errors += 1;
-                emit(HashEvent::FileError { volume_id, path: path.clone(), error: e.to_string() });
+                emit(HashEvent::FileError {
+                    volume_id,
+                    path: path.clone(),
+                    error: e.to_string(),
+                });
             }
         }
 
@@ -170,11 +213,18 @@ pub fn run_hash(
     }
 
     stats.duration_ms = start.elapsed().as_millis() as u64;
-    emit(HashEvent::Completed { volume_id, stats: stats.clone() });
+    emit(HashEvent::Completed {
+        volume_id,
+        stats: stats.clone(),
+    });
 
     log::info!(
         "Hash done for volume {}: {} hashed, {} skipped, {} errors in {}ms",
-        volume_id, stats.files_hashed, stats.files_skipped, stats.files_errors, stats.duration_ms
+        volume_id,
+        stats.files_hashed,
+        stats.files_skipped,
+        stats.files_errors,
+        stats.duration_ms
     );
 
     Ok(stats)
@@ -182,16 +232,25 @@ pub fn run_hash(
 
 fn hash_one_file(path: &Path, do_full: bool) -> HashResult<(String, Option<String>)> {
     let qh = quick_hash_file(path)?;
-    let fh = if do_full { Some(full_hash_file(path)?) } else { None };
+    let fh = if do_full {
+        Some(full_hash_file(path)?)
+    } else {
+        None
+    };
     Ok((qh, fh))
 }
 
-fn flush_hash_batch(db: &Database, batch: &mut Vec<(i64, String, Option<String>)>) -> HashResult<()> {
+fn flush_hash_batch(
+    db: &Database,
+    batch: &mut Vec<(i64, String, Option<String>)>,
+) -> HashResult<()> {
     let owned: Vec<_> = batch.drain(..).collect();
     db.write_transaction(move |tx| {
-        let mut stmt = tx.prepare_cached(
-            "UPDATE entries SET quick_hash=?1, full_hash=?2, hash_algo='blake3' WHERE id=?3"
-        ).map_err(DbError::Sqlite)?;
+        let mut stmt = tx
+            .prepare_cached(
+                "UPDATE entries SET quick_hash=?1, full_hash=?2, hash_algo='blake3' WHERE id=?3",
+            )
+            .map_err(DbError::Sqlite)?;
         for (id, qh, fh) in &owned {
             stmt.execute(params![qh, fh, id]).map_err(DbError::Sqlite)?;
         }

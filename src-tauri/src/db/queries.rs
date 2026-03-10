@@ -3,7 +3,7 @@
 // Optimized queries: column indices, prepare_cached, slim SELECTs
 // ============================================================================
 
-use super::DbResult;
+use super::{DbError, DbResult};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
@@ -90,6 +90,9 @@ pub struct SearchResult {
     pub size_bytes: i64,
     pub volume_id: i64,
     pub rank: f64,
+    pub is_dir: bool,
+    pub ext: Option<String>,
+    pub mtime: Option<i64>,
 }
 
 /// Parameters for batch upsert during scan.
@@ -323,25 +326,58 @@ pub fn update_entry_hash(
 // Search (FTS5)
 // ============================================================================
 
-pub fn search_entries(conn: &Connection, query: &str, limit: i64) -> DbResult<Vec<SearchResult>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT e.id,e.name,e.path,e.kind,e.size_bytes,e.volume_id,rank
+pub fn search_entries(
+    conn: &Connection,
+    query: &str,
+    limit: i64,
+    volume_id: Option<i64>,
+    path_prefix: Option<&str>,
+) -> DbResult<Vec<SearchResult>> {
+    // Build query dynamically — extra WHERE clauses are parameterised, never interpolated.
+    let mut sql = String::from(
+        "SELECT e.id,e.name,e.path,e.kind,e.size_bytes,e.volume_id,rank,e.is_dir,e.ext,e.mtime
          FROM entries_fts fts JOIN entries e ON e.id=fts.rowid
-         WHERE entries_fts MATCH ?1 AND e.status='present'
-         ORDER BY rank LIMIT ?2",
-    )?;
+         WHERE entries_fts MATCH ?1 AND e.status='present'",
+    );
+    if volume_id.is_some() {
+        sql.push_str(" AND e.volume_id=?3");
+    }
+    if path_prefix.is_some() {
+        // Match the exact folder and everything beneath it.
+        // We use (path = prefix OR path LIKE prefix || sep || '%') so we don't
+        // accidentally match sibling paths that share the prefix as a substring.
+        sql.push_str(" AND (e.path=?4 OR e.path LIKE ?4 || '/%' ESCAPE '\\' OR e.path LIKE ?4 || '\\%' ESCAPE '\\')");
+    }
+    sql.push_str(" ORDER BY rank LIMIT ?2");
+
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
-        .query_map(params![query, limit], |row| {
-            Ok(SearchResult {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                path: row.get(2)?,
-                kind: row.get(3)?,
-                size_bytes: row.get(4)?,
-                volume_id: row.get(5)?,
-                rank: row.get(6)?,
-            })
-        })?
+        .query_map(
+            rusqlite::params_from_iter([
+                rusqlite::types::Value::Text(query.to_owned()),
+                rusqlite::types::Value::Integer(limit),
+                volume_id
+                    .map(rusqlite::types::Value::Integer)
+                    .unwrap_or(rusqlite::types::Value::Null),
+                path_prefix
+                    .map(|p| rusqlite::types::Value::Text(p.to_owned()))
+                    .unwrap_or(rusqlite::types::Value::Null),
+            ]),
+            |row| {
+                Ok(SearchResult {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    path: row.get(2)?,
+                    kind: row.get(3)?,
+                    size_bytes: row.get(4)?,
+                    volume_id: row.get(5)?,
+                    rank: row.get(6)?,
+                    is_dir: row.get(7)?,
+                    ext: row.get(8)?,
+                    mtime: row.get(9)?,
+                })
+            },
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
@@ -352,7 +388,7 @@ pub fn search_text_content(
     limit: i64,
 ) -> DbResult<Vec<SearchResult>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT e.id,e.name,e.path,e.kind,e.size_bytes,e.volume_id,fts.rank
+        "SELECT e.id,e.name,e.path,e.kind,e.size_bytes,e.volume_id,fts.rank,e.is_dir,e.ext,e.mtime
          FROM entry_text_fts fts JOIN entries e ON e.id=fts.rowid
          WHERE entry_text_fts MATCH ?1 AND e.status='present'
          ORDER BY fts.rank LIMIT ?2",
@@ -367,6 +403,9 @@ pub fn search_text_content(
                 size_bytes: row.get(4)?,
                 volume_id: row.get(5)?,
                 rank: row.get(6)?,
+                is_dir: row.get(7)?,
+                ext: row.get(8)?,
+                mtime: row.get(9)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1126,6 +1165,176 @@ pub fn get_entry_custom_values(
     let rows = stmt
         .query_map(params![entry_id], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+// ============================================================================
+// Typed metadata rows (meta_image, meta_audio, meta_video, meta_document)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetaImage {
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub orientation: Option<i64>,
+    pub color_space: Option<String>,
+    pub camera_make: Option<String>,
+    pub camera_model: Option<String>,
+    pub iso: Option<i64>,
+    pub focal_length: Option<f64>,
+    pub aperture: Option<f64>,
+    pub shutter_speed: Option<String>,
+    pub gps_lat: Option<f64>,
+    pub gps_lon: Option<f64>,
+    pub taken_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetaAudio {
+    pub duration_ms: Option<i64>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub title: Option<String>,
+    pub track_number: Option<i64>,
+    pub genre: Option<String>,
+    pub year: Option<i64>,
+    pub bitrate: Option<i64>,
+    pub sample_rate: Option<i64>,
+    pub channels: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetaVideo {
+    pub duration_ms: Option<i64>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub fps: Option<f64>,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub bitrate: Option<i64>,
+    pub container: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetaDocument {
+    pub format: Option<String>,
+    pub page_count: Option<i64>,
+    pub title: Option<String>,
+    pub author: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiAnnotationRow {
+    pub kind: String,
+    pub value: String,
+    pub confidence: Option<f64>,
+    pub source: String,
+}
+
+pub fn get_image_meta(conn: &Connection, entry_id: i64) -> DbResult<Option<MetaImage>> {
+    conn.prepare_cached(
+        "SELECT width, height, orientation, color_space, camera_make, camera_model,
+                iso, focal_length, aperture, shutter_speed, gps_lat, gps_lon, taken_at
+         FROM meta_image WHERE entry_id = ?1",
+    )?
+    .query_row(params![entry_id], |r| {
+        Ok(MetaImage {
+            width: r.get(0)?,
+            height: r.get(1)?,
+            orientation: r.get(2)?,
+            color_space: r.get(3)?,
+            camera_make: r.get(4)?,
+            camera_model: r.get(5)?,
+            iso: r.get(6)?,
+            focal_length: r.get(7)?,
+            aperture: r.get(8)?,
+            shutter_speed: r.get(9)?,
+            gps_lat: r.get(10)?,
+            gps_lon: r.get(11)?,
+            taken_at: r.get(12)?,
+        })
+    })
+    .optional()
+    .map_err(DbError::Sqlite)
+}
+
+pub fn get_audio_meta(conn: &Connection, entry_id: i64) -> DbResult<Option<MetaAudio>> {
+    conn.prepare_cached(
+        "SELECT duration_ms, artist, album, title, track_number,
+                genre, year, bitrate, sample_rate, channels
+         FROM meta_audio WHERE entry_id = ?1",
+    )?
+    .query_row(params![entry_id], |r| {
+        Ok(MetaAudio {
+            duration_ms: r.get(0)?,
+            artist: r.get(1)?,
+            album: r.get(2)?,
+            title: r.get(3)?,
+            track_number: r.get(4)?,
+            genre: r.get(5)?,
+            year: r.get(6)?,
+            bitrate: r.get(7)?,
+            sample_rate: r.get(8)?,
+            channels: r.get(9)?,
+        })
+    })
+    .optional()
+    .map_err(DbError::Sqlite)
+}
+
+pub fn get_video_meta(conn: &Connection, entry_id: i64) -> DbResult<Option<MetaVideo>> {
+    conn.prepare_cached(
+        "SELECT duration_ms, width, height, fps, video_codec,
+                audio_codec, bitrate, container
+         FROM meta_video WHERE entry_id = ?1",
+    )?
+    .query_row(params![entry_id], |r| {
+        Ok(MetaVideo {
+            duration_ms: r.get(0)?,
+            width: r.get(1)?,
+            height: r.get(2)?,
+            fps: r.get(3)?,
+            video_codec: r.get(4)?,
+            audio_codec: r.get(5)?,
+            bitrate: r.get(6)?,
+            container: r.get(7)?,
+        })
+    })
+    .optional()
+    .map_err(DbError::Sqlite)
+}
+
+pub fn get_doc_meta(conn: &Connection, entry_id: i64) -> DbResult<Option<MetaDocument>> {
+    conn.prepare_cached(
+        "SELECT format, page_count, title, author FROM meta_document WHERE entry_id = ?1",
+    )?
+    .query_row(params![entry_id], |r| {
+        Ok(MetaDocument {
+            format: r.get(0)?,
+            page_count: r.get(1)?,
+            title: r.get(2)?,
+            author: r.get(3)?,
+        })
+    })
+    .optional()
+    .map_err(DbError::Sqlite)
+}
+
+pub fn get_ai_annotations(conn: &Connection, entry_id: i64) -> DbResult<Vec<AiAnnotationRow>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT kind, value, confidence, source FROM ai_annotations
+         WHERE entry_id = ?1 ORDER BY created_at",
+    )?;
+    let rows = stmt
+        .query_map(params![entry_id], |r| {
+            Ok(AiAnnotationRow {
+                kind: r.get(0)?,
+                value: r.get(1)?,
+                confidence: r.get(2)?,
+                source: r.get(3)?,
+            })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)

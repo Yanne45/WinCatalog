@@ -1,10 +1,10 @@
 // ============================================================================
 // WinCatalog — components/Inspector/ImageHistogram.tsx
-// RGB histogram: shows color channel distribution for images
-// Uses pseudo-data (real data would come from canvas pixel analysis)
+// RGB histogram: real pixel analysis via hidden <canvas> when imageSrc is given
+// Falls back to a dimmed placeholder when offline or image unloadable
 // ============================================================================
 
-import { useMemo } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Box, Group, Text, Stack, Badge } from '@mantine/core';
 
 // ============================================================================
@@ -12,49 +12,103 @@ import { Box, Group, Text, Stack, Badge } from '@mantine/core';
 // ============================================================================
 
 export interface ImageHistogramProps {
-  /** Seed for deterministic pseudo-data (e.g. file path or hash) */
-  seed: string;
-  /** Width of the histogram */
+  /** convertFileSrc URL — if provided, real pixel data is computed */
+  imageSrc?: string;
   width?: number;
-  /** Height of the histogram */
   height?: number;
 }
 
 // ============================================================================
-// Generate pseudo-histogram data
+// Canvas analysis
 // ============================================================================
 
-function generateHistogram(seed: string, bins: number): { r: number[]; g: number[]; b: number[] } {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) {
-    h = ((h << 5) - h + seed.charCodeAt(i)) | 0;
-  }
+interface HistData { r: number[]; g: number[]; b: number[]; }
 
-  const channel = (offset: number): number[] => {
-    const data: number[] = [];
-    let s = h + offset;
-    for (let i = 0; i < bins; i++) {
-      s = ((s * 1103515245 + 12345) & 0x7fffffff);
-      // Bell curve shape with some noise
-      const x = i / bins;
-      const bell = Math.exp(-Math.pow((x - 0.5) * 3, 2));
-      const noise = (s % 100) / 200;
-      data.push(Math.max(0, Math.min(1, bell * 0.8 + noise)));
-    }
-    return data;
-  };
+function analyzeImage(src: string, bins: number): Promise<HistData> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      // Downsample to at most 200x200 for performance
+      const scale = Math.min(1, 200 / Math.max(img.naturalWidth, img.naturalHeight, 1));
+      canvas.width = Math.round(img.naturalWidth * scale);
+      canvas.height = Math.round(img.naturalHeight * scale);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { reject(new Error('no ctx')); return; }
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-  return { r: channel(1), g: channel(2), b: channel(3) };
+      const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const r = new Array<number>(bins).fill(0);
+      const g = new Array<number>(bins).fill(0);
+      const b = new Array<number>(bins).fill(0);
+      let max = 0;
+
+      for (let i = 0; i < data.length; i += 4) {
+        const ri = Math.floor(data[i] / 256 * bins);
+        const gi = Math.floor(data[i + 1] / 256 * bins);
+        const bi = Math.floor(data[i + 2] / 256 * bins);
+        r[ri]++; g[gi]++; b[bi]++;
+      }
+
+      // Normalise to 0-1
+      for (let i = 0; i < bins; i++) max = Math.max(max, r[i], g[i], b[i]);
+      if (max > 0) {
+        for (let i = 0; i < bins; i++) { r[i] /= max; g[i] /= max; b[i] /= max; }
+      }
+
+      resolve({ r, g, b });
+    };
+    img.onerror = () => reject(new Error('load error'));
+    img.src = src;
+  });
+}
+
+// ============================================================================
+// Rendering
+// ============================================================================
+
+function Bars({ data, width, height }: { data: HistData; width: number; height: number }) {
+  const bins = data.r.length;
+  const barW = Math.max(1, width / bins);
+  return (
+    <svg width={width} height={height} style={{ position: 'absolute', top: 0, left: 0 }}>
+      <g opacity={0.45}>
+        {data.r.map((v, i) => <rect key={`r${i}`} x={i * barW} y={height - v * height} width={barW} height={v * height} fill="#ef4444" />)}
+      </g>
+      <g opacity={0.45}>
+        {data.g.map((v, i) => <rect key={`g${i}`} x={i * barW} y={height - v * height} width={barW} height={v * height} fill="#22c55e" />)}
+      </g>
+      <g opacity={0.45}>
+        {data.b.map((v, i) => <rect key={`b${i}`} x={i * barW} y={height - v * height} width={barW} height={v * height} fill="#3b82f6" />)}
+      </g>
+    </svg>
+  );
 }
 
 // ============================================================================
 // Component
 // ============================================================================
 
-export default function ImageHistogram({ seed, width = 240, height = 60 }: ImageHistogramProps) {
-  const data = useMemo(() => generateHistogram(seed, 64), [seed]);
-  const bins = data.r.length;
-  const barW = Math.max(1, Math.floor(width / bins));
+const BINS = 64;
+
+export default function ImageHistogram({ imageSrc, width = 240, height = 60 }: ImageHistogramProps) {
+  const [data, setData] = useState<HistData | null>(null);
+  const [failed, setFailed] = useState(false);
+  const srcRef = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (!imageSrc) { setData(null); setFailed(false); return; }
+    if (srcRef.current === imageSrc) return; // already loaded
+    srcRef.current = imageSrc;
+    setData(null); setFailed(false);
+
+    let cancelled = false;
+    analyzeImage(imageSrc, BINS)
+      .then((d) => { if (!cancelled) setData(d); })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => { cancelled = true; };
+  }, [imageSrc]);
 
   return (
     <Stack gap={4}>
@@ -72,25 +126,15 @@ export default function ImageHistogram({ seed, width = 240, height = 60 }: Image
         borderRadius: 'var(--mantine-radius-xs)',
         backgroundColor: 'var(--mantine-color-default)',
         overflow: 'hidden',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
-        {/* Red channel */}
-        <svg width={width} height={height} style={{ position: 'absolute', top: 0, left: 0 }}>
-          <g opacity={0.4}>
-            {data.r.map((v, i) => (
-              <rect key={`r-${i}`} x={i * barW} y={height - v * height} width={barW} height={v * height} fill="#ef4444" />
-            ))}
-          </g>
-          <g opacity={0.4}>
-            {data.g.map((v, i) => (
-              <rect key={`g-${i}`} x={i * barW} y={height - v * height} width={barW} height={v * height} fill="#22c55e" />
-            ))}
-          </g>
-          <g opacity={0.4}>
-            {data.b.map((v, i) => (
-              <rect key={`b-${i}`} x={i * barW} y={height - v * height} width={barW} height={v * height} fill="#3b82f6" />
-            ))}
-          </g>
-        </svg>
+        {data ? (
+          <Bars data={data} width={width} height={height} />
+        ) : (
+          <Text size="xs" c="dimmed" style={{ opacity: 0.4, userSelect: 'none' }}>
+            {failed ? 'Indisponible' : (imageSrc ? '…' : 'Hors ligne')}
+          </Text>
+        )}
       </Box>
     </Stack>
   );

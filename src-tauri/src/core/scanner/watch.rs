@@ -19,7 +19,7 @@ use crossbeam_channel::{bounded, select, Receiver, Sender};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rusqlite::params;
 
-use crate::db::Database;
+use crate::db::{Database, DbError};
 
 // ============================================================================
 // Types
@@ -28,10 +28,22 @@ use crate::db::Database;
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type")]
 pub enum WatchEvent {
-    Started { volume_id: i64, path: String },
-    Change { volume_id: i64, kind: String, paths: Vec<String> },
-    Error { volume_id: i64, error: String },
-    Stopped { volume_id: i64 },
+    Started {
+        volume_id: i64,
+        path: String,
+    },
+    Change {
+        volume_id: i64,
+        kind: String,
+        paths: Vec<String>,
+    },
+    Error {
+        volume_id: i64,
+        error: String,
+    },
+    Stopped {
+        volume_id: i64,
+    },
 }
 
 pub type WatchEventCallback = Arc<dyn Fn(WatchEvent) + Send + Sync>;
@@ -51,8 +63,11 @@ impl Default for WatchConfig {
             root_path: PathBuf::new(),
             debounce_ms: 500,
             exclusions: vec![
-                "node_modules".into(), ".git".into(), ".DS_Store".into(),
-                "Thumbs.db".into(), "$RECYCLE.BIN".into(),
+                "node_modules".into(),
+                ".git".into(),
+                ".DS_Store".into(),
+                "Thumbs.db".into(),
+                "$RECYCLE.BIN".into(),
             ],
         }
     }
@@ -85,7 +100,10 @@ impl FsWatcher {
             })
             .map_err(|e| format!("Spawn watch thread: {}", e))?;
 
-        Ok(Self { stop_tx, thread: Some(thread) })
+        Ok(Self {
+            stop_tx,
+            thread: Some(thread),
+        })
     }
 
     pub fn stop(mut self) {
@@ -113,7 +131,9 @@ fn watch_loop(
     on_event: Option<WatchEventCallback>,
 ) -> Result<(), String> {
     let emit = |evt: WatchEvent| {
-        if let Some(ref cb) = on_event { cb(evt); }
+        if let Some(ref cb) = on_event {
+            cb(evt);
+        }
     };
 
     // Channel for notify events
@@ -121,11 +141,15 @@ fn watch_loop(
 
     // Create watcher
     let mut watcher = RecommendedWatcher::new(
-        move |res| { let _ = notify_tx.send(res); },
+        move |res| {
+            let _ = notify_tx.send(res);
+        },
         Config::default().with_poll_interval(Duration::from_secs(2)),
-    ).map_err(|e| format!("Create watcher: {}", e))?;
+    )
+    .map_err(|e| format!("Create watcher: {}", e))?;
 
-    watcher.watch(&config.root_path, RecursiveMode::Recursive)
+    watcher
+        .watch(&config.root_path, RecursiveMode::Recursive)
         .map_err(|e| format!("Watch path: {}", e))?;
 
     emit(WatchEvent::Started {
@@ -133,7 +157,11 @@ fn watch_loop(
         path: config.root_path.display().to_string(),
     });
 
-    log::info!("Watch started on {} (volume {})", config.root_path.display(), config.volume_id);
+    log::info!(
+        "Watch started on {} (volume {})",
+        config.root_path.display(),
+        config.volume_id
+    );
 
     let debounce = Duration::from_millis(config.debounce_ms);
     let mut pending: HashMap<PathBuf, ChangeKind> = HashMap::new();
@@ -219,6 +247,17 @@ fn process_changes(
     emit: &dyn Fn(WatchEvent),
 ) {
     let now = ts();
+    let mut upserts: Vec<(
+        String,
+        String,
+        String,
+        i32,
+        String,
+        Option<String>,
+        i64,
+        Option<i64>,
+    )> = Vec::new();
+    let mut removals: Vec<String> = Vec::new();
     let mut created_paths = Vec::new();
     let mut modified_paths = Vec::new();
     let mut removed_paths = Vec::new();
@@ -233,64 +272,122 @@ fn process_changes(
 
                 let is_dir = metadata.is_dir();
                 let full_path = path.to_string_lossy().to_string();
-                let parent = path.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-                let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                let ext = if is_dir { None } else { path.extension().map(|e| e.to_string_lossy().to_lowercase()) };
-                let file_kind = if is_dir { "dir".to_string() } else {
+                let parent = path
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let ext = if is_dir {
+                    None
+                } else {
+                    path.extension().map(|e| e.to_string_lossy().to_lowercase())
+                };
+                let file_kind = if is_dir {
+                    "dir".to_string()
+                } else {
                     super::kind::detect_kind(ext.as_deref(), None)
                 };
                 let size = if is_dir { 0 } else { metadata.len() as i64 };
-                let mtime = metadata.modified().ok()
+                let mtime = metadata
+                    .modified()
+                    .ok()
                     .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                     .map(|d| d.as_secs() as i64);
 
-                let result = db.write(move |conn| {
-                    conn.execute(
-                        "INSERT INTO entries (volume_id,path,parent_path,name,is_dir,kind,ext,size_bytes,mtime,status,last_seen_at)
-                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'present',?10)
-                         ON CONFLICT(volume_id,path) DO UPDATE SET
-                           name=excluded.name, is_dir=excluded.is_dir, kind=excluded.kind,
-                           ext=excluded.ext, size_bytes=excluded.size_bytes, mtime=excluded.mtime,
-                           status='present', last_seen_at=excluded.last_seen_at",
-                        params![volume_id, full_path, parent, name, is_dir as i32, file_kind, ext, size, mtime, now],
-                    )?;
-                    Ok(())
-                });
-
-                if result.is_ok() {
-                    match kind {
-                        ChangeKind::Created => created_paths.push(path.to_string_lossy().to_string()),
-                        ChangeKind::Modified => modified_paths.push(path.to_string_lossy().to_string()),
-                        _ => {}
-                    }
+                upserts.push((
+                    full_path,
+                    parent,
+                    name,
+                    is_dir as i32,
+                    file_kind,
+                    ext,
+                    size,
+                    mtime,
+                ));
+                match kind {
+                    ChangeKind::Created => created_paths.push(path.to_string_lossy().to_string()),
+                    ChangeKind::Modified => modified_paths.push(path.to_string_lossy().to_string()),
+                    _ => {}
                 }
             }
             ChangeKind::Removed => {
                 let full_path = path.to_string_lossy().to_string();
-                let _ = db.write(move |conn| {
-                    conn.execute(
-                        "UPDATE entries SET status='missing' WHERE volume_id=?1 AND path=?2",
-                        params![volume_id, full_path],
-                    )?;
-                    Ok(())
-                });
+                removals.push(full_path);
                 removed_paths.push(path.to_string_lossy().to_string());
             }
         }
     }
 
+    if upserts.is_empty() && removals.is_empty() {
+        return;
+    }
+
+    let result = db.write_transaction(move |tx| {
+        if !upserts.is_empty() {
+            let mut upsert_stmt = tx.prepare_cached(
+                "INSERT INTO entries (volume_id,path,parent_path,name,is_dir,kind,ext,size_bytes,mtime,status,last_seen_at)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'present',?10)
+                 ON CONFLICT(volume_id,path) DO UPDATE SET
+                   name=excluded.name, is_dir=excluded.is_dir, kind=excluded.kind,
+                   ext=excluded.ext, size_bytes=excluded.size_bytes, mtime=excluded.mtime,
+                   status='present', last_seen_at=excluded.last_seen_at"
+            ).map_err(DbError::Sqlite)?;
+            for (path, parent, name, is_dir, kind, ext, size, mtime) in upserts {
+                upsert_stmt.execute(params![
+                    volume_id, path, parent, name, is_dir, kind, ext, size, mtime, now
+                ]).map_err(DbError::Sqlite)?;
+            }
+        }
+
+        if !removals.is_empty() {
+            let mut remove_stmt = tx.prepare_cached(
+                "UPDATE entries SET status='missing' WHERE volume_id=?1 AND path=?2"
+            ).map_err(DbError::Sqlite)?;
+            for path in removals {
+                remove_stmt.execute(params![volume_id, path]).map_err(DbError::Sqlite)?;
+            }
+        }
+        Ok(())
+    });
+
+    if let Err(e) = result {
+        emit(WatchEvent::Error {
+            volume_id,
+            error: format!("Process changes failed: {}", e),
+        });
+        return;
+    }
+
     // Emit aggregated events
     if !created_paths.is_empty() {
-        emit(WatchEvent::Change { volume_id, kind: "created".into(), paths: created_paths });
+        emit(WatchEvent::Change {
+            volume_id,
+            kind: "created".into(),
+            paths: created_paths,
+        });
     }
     if !modified_paths.is_empty() {
-        emit(WatchEvent::Change { volume_id, kind: "modified".into(), paths: modified_paths });
+        emit(WatchEvent::Change {
+            volume_id,
+            kind: "modified".into(),
+            paths: modified_paths,
+        });
     }
     if !removed_paths.is_empty() {
-        emit(WatchEvent::Change { volume_id, kind: "removed".into(), paths: removed_paths });
+        emit(WatchEvent::Change {
+            volume_id,
+            kind: "removed".into(),
+            paths: removed_paths,
+        });
     }
 }
 
 fn ts() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }

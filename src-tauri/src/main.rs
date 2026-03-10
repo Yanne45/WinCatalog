@@ -159,6 +159,16 @@ fn main() {
             commands::get_volume_snapshots,
             // Diagnostics
             commands::get_db_diagnostics,
+            // Typed metadata
+            commands::get_image_meta,
+            commands::get_audio_meta,
+            commands::get_video_meta,
+            commands::get_doc_meta,
+            commands::get_ai_annotations,
+            // Maintenance
+            commands::optimize_db,
+            commands::clear_thumb_cache,
+            commands::reset_index,
         ])
         .run(tauri::generate_context!())
         .expect("Error while running WinCatalog");

@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use crossbeam_channel::bounded;
 
-use super::{run_scan, ScanConfig, ScanEvent, ScanMode, ScanStats, EventCallback};
+use super::{run_scan, EventCallback, ScanConfig, ScanEvent, ScanMode, ScanStats};
 use crate::db::Database;
 
 // ============================================================================
@@ -45,24 +45,13 @@ pub enum ParallelScanEvent {
         current_volume_id: i64,
     },
     /// A single volume scan completed
-    VolumeDone {
-        volume_id: i64,
-        stats: ScanStats,
-    },
+    VolumeDone { volume_id: i64, stats: ScanStats },
     /// A single volume scan failed
-    VolumeError {
-        volume_id: i64,
-        error: String,
-    },
+    VolumeError { volume_id: i64, error: String },
     /// All scans completed
-    AllDone {
-        stats: ParallelScanStats,
-    },
+    AllDone { stats: ParallelScanStats },
     /// Forwarded event from an individual scan
-    ScanEvent {
-        volume_id: i64,
-        event: ScanEvent,
-    },
+    ScanEvent { volume_id: i64, event: ScanEvent },
 }
 
 pub type ParallelEventCallback = Arc<dyn Fn(ParallelScanEvent) + Send + Sync>;
@@ -93,8 +82,11 @@ impl Default for ParallelScanConfig {
             max_concurrent: 0,
             max_depth: Some(50),
             exclusions: vec![
-                "node_modules".into(), ".git".into(), ".DS_Store".into(),
-                "Thumbs.db".into(), "$RECYCLE.BIN".into(),
+                "node_modules".into(),
+                ".git".into(),
+                ".DS_Store".into(),
+                "Thumbs.db".into(),
+                "$RECYCLE.BIN".into(),
             ],
             batch_size: 500,
         }
@@ -114,7 +106,11 @@ pub fn run_parallel_scan(
     on_event: Option<ParallelEventCallback>,
 ) -> ParallelScanStats {
     let start = Instant::now();
-    let emit = |e: ParallelScanEvent| { if let Some(ref cb) = on_event { cb(e); } };
+    let emit = |e: ParallelScanEvent| {
+        if let Some(ref cb) = on_event {
+            cb(e);
+        }
+    };
 
     let max_threads = if config.max_concurrent == 0 {
         config.volume_ids.len().min(4)
@@ -126,13 +122,19 @@ pub fn run_parallel_scan(
     let (result_tx, result_rx) = bounded::<VolumeScanResult>(total_volumes);
 
     // Resolve volume paths
-    let volume_configs: Vec<(i64, PathBuf)> = config.volume_ids.iter().filter_map(|&vid| {
-        db.read(|conn| {
-            conn.prepare_cached("SELECT root_path FROM volumes WHERE id=?1")?
-                .query_row(rusqlite::params![vid], |r| r.get::<_, String>(0))
-                .map_err(crate::db::DbError::Sqlite)
-        }).ok().map(|path| (vid, PathBuf::from(path)))
-    }).collect();
+    let volume_configs: Vec<(i64, PathBuf)> = config
+        .volume_ids
+        .iter()
+        .filter_map(|&vid| {
+            db.read(|conn| {
+                conn.prepare_cached("SELECT root_path FROM volumes WHERE id=?1")?
+                    .query_row(rusqlite::params![vid], |r| r.get::<_, String>(0))
+                    .map_err(crate::db::DbError::Sqlite)
+            })
+            .ok()
+            .map(|path| (vid, PathBuf::from(path)))
+        })
+        .collect();
 
     // Chunk volumes into batches of max_threads
     let chunks: Vec<Vec<(i64, PathBuf)>> = volume_configs
@@ -144,7 +146,9 @@ pub fn run_parallel_scan(
     let mut done_count = 0usize;
 
     for chunk in chunks {
-        if cancel.load(Ordering::Relaxed) { break; }
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
 
         let mut handles = Vec::new();
 
@@ -175,21 +179,28 @@ pub fn run_parallel_scan(
                     let flag = cancel_clone.clone();
                     let stop_watcher = Arc::new(AtomicBool::new(false));
                     let stop_flag = stop_watcher.clone();
-                    let watcher_handle = thread::spawn(move || {
-                        loop {
-                            if flag.load(Ordering::Relaxed) { let _ = cancel_tx_inner.send(()); break; }
-                            if stop_flag.load(Ordering::Relaxed) { break; }
-                            thread::sleep(std::time::Duration::from_millis(100));
+                    let watcher_handle = thread::spawn(move || loop {
+                        if flag.load(Ordering::Relaxed) {
+                            let _ = cancel_tx_inner.send(());
+                            break;
                         }
+                        if stop_flag.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        thread::sleep(std::time::Duration::from_millis(100));
                     });
 
                     // Forward scan events
                     let vid = volume_id;
-                    let event_cb: Option<EventCallback> = on_event_clone.map(|cb| -> EventCallback {
-                        Box::new(move |evt: ScanEvent| {
-                            cb(ParallelScanEvent::ScanEvent { volume_id: vid, event: evt });
-                        })
-                    });
+                    let event_cb: Option<EventCallback> =
+                        on_event_clone.map(|cb| -> EventCallback {
+                            Box::new(move |evt: ScanEvent| {
+                                cb(ParallelScanEvent::ScanEvent {
+                                    volume_id: vid,
+                                    event: evt,
+                                });
+                            })
+                        });
 
                     let result = run_scan(&db_clone, scan_config, cancel_rx_inner, event_cb);
 
@@ -198,8 +209,16 @@ pub fn run_parallel_scan(
                     let _ = watcher_handle.join();
 
                     let vol_result = match result {
-                        Ok(stats) => VolumeScanResult { volume_id, stats: Some(stats), error: None },
-                        Err(e) => VolumeScanResult { volume_id, stats: None, error: Some(e.to_string()) },
+                        Ok(stats) => VolumeScanResult {
+                            volume_id,
+                            stats: Some(stats),
+                            error: None,
+                        },
+                        Err(e) => VolumeScanResult {
+                            volume_id,
+                            stats: None,
+                            error: Some(e.to_string()),
+                        },
                     };
 
                     let _ = tx.send(vol_result);
@@ -215,11 +234,25 @@ pub fn run_parallel_scan(
             if let Ok(result) = result_rx.recv() {
                 done_count += 1;
                 match &result {
-                    VolumeScanResult { volume_id, stats: Some(s), .. } => {
-                        emit(ParallelScanEvent::VolumeDone { volume_id: *volume_id, stats: s.clone() });
+                    VolumeScanResult {
+                        volume_id,
+                        stats: Some(s),
+                        ..
+                    } => {
+                        emit(ParallelScanEvent::VolumeDone {
+                            volume_id: *volume_id,
+                            stats: s.clone(),
+                        });
                     }
-                    VolumeScanResult { volume_id, error: Some(e), .. } => {
-                        emit(ParallelScanEvent::VolumeError { volume_id: *volume_id, error: e.clone() });
+                    VolumeScanResult {
+                        volume_id,
+                        error: Some(e),
+                        ..
+                    } => {
+                        emit(ParallelScanEvent::VolumeError {
+                            volume_id: *volume_id,
+                            error: e.clone(),
+                        });
                     }
                     _ => {}
                 }
@@ -233,26 +266,48 @@ pub fn run_parallel_scan(
         }
 
         // Join threads
-        for h in handles { let _ = h.join(); }
+        for h in handles {
+            let _ = h.join();
+        }
     }
 
-    let total_files = all_results.iter().filter_map(|r| r.stats.as_ref()).map(|s| s.files_total).sum();
-    let total_dirs = all_results.iter().filter_map(|r| r.stats.as_ref()).map(|s| s.dirs_total).sum();
-    let total_bytes = all_results.iter().filter_map(|r| r.stats.as_ref()).map(|s| s.bytes_total).sum();
+    let total_files = all_results
+        .iter()
+        .filter_map(|r| r.stats.as_ref())
+        .map(|s| s.files_total)
+        .sum();
+    let total_dirs = all_results
+        .iter()
+        .filter_map(|r| r.stats.as_ref())
+        .map(|s| s.dirs_total)
+        .sum();
+    let total_bytes = all_results
+        .iter()
+        .filter_map(|r| r.stats.as_ref())
+        .map(|s| s.bytes_total)
+        .sum();
     let errors = all_results.iter().filter(|r| r.error.is_some()).count() as u64;
 
     let stats = ParallelScanStats {
         volume_stats: all_results,
-        total_files, total_dirs, total_bytes,
+        total_files,
+        total_dirs,
+        total_bytes,
         total_duration_ms: start.elapsed().as_millis() as u64,
         errors,
     };
 
-    emit(ParallelScanEvent::AllDone { stats: stats.clone() });
+    emit(ParallelScanEvent::AllDone {
+        stats: stats.clone(),
+    });
 
     log::info!(
         "Parallel scan done: {} volumes, {} files, {} dirs, {} bytes in {}ms",
-        total_volumes, total_files, total_dirs, total_bytes, stats.total_duration_ms
+        total_volumes,
+        total_files,
+        total_dirs,
+        total_bytes,
+        stats.total_duration_ms
     );
 
     stats

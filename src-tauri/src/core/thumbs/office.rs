@@ -21,7 +21,7 @@ const THUMBNAIL_PATHS: &[&str] = &[
     "docProps/thumbnail.jpeg",
     "docProps/thumbnail.jpg",
     "docProps/thumbnail.png",
-    "docProps/thumbnail.emf",     // We'll try to decode, skip if not image
+    "docProps/thumbnail.emf", // We'll try to decode, skip if not image
     "_rels/thumbnail.jpeg",
     "_rels/thumbnail.jpg",
     "_rels/thumbnail.png",
@@ -31,8 +31,7 @@ const THUMBNAIL_PATHS: &[&str] = &[
 /// Returns the raw image bytes (JPEG or PNG).
 pub fn extract_office_thumbnail(source: &Path) -> Result<Vec<u8>, ThumbError> {
     let file = std::fs::File::open(source)?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|_| ThumbError::NoCoverArt)?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|_| ThumbError::NoCoverArt)?;
 
     // Strategy 1: try known paths
     for path in THUMBNAIL_PATHS {
@@ -41,11 +40,7 @@ pub fn extract_office_thumbnail(source: &Path) -> Result<Vec<u8>, ThumbError> {
             entry.read_to_end(&mut buf)?;
 
             if !buf.is_empty() && is_image_data(&buf) {
-                log::debug!(
-                    "Office thumbnail found at '{}' ({} bytes)",
-                    path,
-                    buf.len()
-                );
+                log::debug!("Office thumbnail found at '{}' ({} bytes)", path, buf.len());
                 return Ok(buf);
             }
         }
@@ -58,21 +53,14 @@ pub fn extract_office_thumbnail(source: &Path) -> Result<Vec<u8>, ThumbError> {
             Err(_) => continue,
         };
         if name.starts_with("docProps/")
-            && (name.ends_with(".jpeg")
-                || name.ends_with(".jpg")
-                || name.ends_with(".png"))
+            && (name.ends_with(".jpeg") || name.ends_with(".jpg") || name.ends_with(".png"))
         {
-            let mut entry = archive.by_index(i)
-                .map_err(|_| ThumbError::NoCoverArt)?;
+            let mut entry = archive.by_index(i).map_err(|_| ThumbError::NoCoverArt)?;
             let mut buf = Vec::with_capacity(entry.size() as usize);
             entry.read_to_end(&mut buf)?;
 
             if !buf.is_empty() && is_image_data(&buf) {
-                log::debug!(
-                    "Office thumbnail found at '{}' ({} bytes)",
-                    name,
-                    buf.len()
-                );
+                log::debug!("Office thumbnail found at '{}' ({} bytes)", name, buf.len());
                 return Ok(buf);
             }
         }
@@ -98,10 +86,7 @@ fn is_image_data(data: &[u8]) -> bool {
     }
 
     // WebP: starts with RIFF....WEBP
-    if data.len() >= 12
-        && &data[0..4] == b"RIFF"
-        && &data[8..12] == b"WEBP"
-    {
+    if data.len() >= 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
         return true;
     }
 

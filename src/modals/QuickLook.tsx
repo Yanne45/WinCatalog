@@ -3,7 +3,8 @@
 // Quick Look: Space to preview, ←→ navigate, works offline via cache
 // ============================================================================
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import {
   Modal, Group, Stack, Text, Box, Button, Badge, Divider,
   ActionIcon, Tooltip, CopyButton,
@@ -45,55 +46,84 @@ export interface QuickLookProps {
 // Preview by kind
 // ============================================================================
 
-function PreviewContent({ entry, isOnline }: { entry: EntrySlim; isOnline: boolean }) {
+function PreviewContent({
+  entry, isOnline, entryPath,
+}: {
+  entry: EntrySlim; isOnline: boolean; entryPath?: string;
+}) {
   const info = FILE_KIND_COLORS[entry.kind] ?? FILE_KIND_COLORS.other;
+  const [mediaError, setMediaError] = useState(false);
+
+  // Reset error state when the entry changes
+  useEffect(() => { setMediaError(false); }, [entry.id]);
+
+  const assetSrc = isOnline && entryPath && !mediaError ? convertFileSrc(entryPath) : null;
+  const boxStyle = { borderRadius: 'var(--mantine-radius-sm)', overflow: 'hidden' as const };
 
   switch (entry.kind) {
     case 'image':
+      if (assetSrc) {
+        return (
+          <Box h={350} style={{ ...boxStyle, backgroundColor: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <img
+              src={assetSrc}
+              alt={entry.name}
+              onError={() => setMediaError(true)}
+              style={{ maxHeight: 350, maxWidth: '100%', objectFit: 'contain', display: 'block' }}
+            />
+          </Box>
+        );
+      }
       return (
-        <Box h={350} style={{
-          backgroundColor: 'var(--mantine-color-default)', borderRadius: 'var(--mantine-radius-sm)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          {/* In real app: load from cache path via convertFileSrc */}
+        <Box h={350} style={{ ...boxStyle, backgroundColor: 'var(--mantine-color-default)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Stack align="center" gap="xs">
             <IconPhoto size={64} stroke={1} style={{ color: info.color }} />
-            <Text size="sm" c="dimmed">Aperçu image</Text>
-            {!isOnline && <Badge size="xs" color="yellow" variant="light">Cache</Badge>}
+            <Text size="sm" c="dimmed">{!isOnline ? 'Volume hors ligne' : 'Aperçu indisponible'}</Text>
+            {!isOnline && <Badge size="xs" color="yellow" variant="light">Hors ligne</Badge>}
           </Stack>
         </Box>
       );
 
     case 'video':
+      if (assetSrc) {
+        return (
+          <Box h={350} style={{ ...boxStyle, backgroundColor: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <video
+              src={assetSrc}
+              controls
+              onError={() => setMediaError(true)}
+              style={{ maxHeight: 350, maxWidth: '100%', display: 'block' }}
+            />
+          </Box>
+        );
+      }
       return (
-        <Box h={350} style={{
-          backgroundColor: '#000', borderRadius: 'var(--mantine-radius-sm)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
+        <Box h={350} style={{ ...boxStyle, backgroundColor: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Stack align="center" gap="xs">
             <IconVideo size={64} stroke={1} style={{ color: info.color }} />
-            {isOnline ? (
-              <Text size="sm" c="dimmed">Lecteur vidéo</Text>
-            ) : (
-              <>
-                <Text size="sm" c="dimmed">Poster vidéo (hors ligne)</Text>
-                <Badge size="xs" color="yellow" variant="light">Volume déconnecté</Badge>
-              </>
-            )}
+            <Text size="sm" c="dimmed">{!isOnline ? 'Volume hors ligne' : 'Lecteur indisponible'}</Text>
+            {!isOnline && <Badge size="xs" color="yellow" variant="light">Volume déconnecté</Badge>}
           </Stack>
         </Box>
       );
 
     case 'audio':
       return (
-        <Box h={250} style={{
-          backgroundColor: 'var(--mantine-color-default)', borderRadius: 'var(--mantine-radius-sm)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <Stack align="center" gap="xs">
-            <IconMusic size={64} stroke={1} style={{ color: info.color }} />
-            <Text size="sm" c="dimmed">Cover album</Text>
-            {isOnline && <Text size="xs" c="dimmed">Lecture disponible</Text>}
+        <Box h={250} style={{ ...boxStyle, backgroundColor: 'var(--mantine-color-default)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Stack align="center" gap="xs" w="100%" px="md">
+            <IconMusic size={56} stroke={1} style={{ color: info.color }} />
+            {assetSrc ? (
+              // eslint-disable-next-line jsx-a11y/media-has-caption
+              <audio
+                key={assetSrc}
+                src={assetSrc}
+                controls
+                onError={() => setMediaError(true)}
+                style={{ width: '100%', marginTop: 8 }}
+              />
+            ) : (
+              <Text size="sm" c="dimmed">{!isOnline ? 'Volume hors ligne' : 'Lecture indisponible'}</Text>
+            )}
             {!isOnline && <Badge size="xs" color="yellow" variant="light">Hors ligne</Badge>}
           </Stack>
         </Box>
@@ -101,25 +131,18 @@ function PreviewContent({ entry, isOnline }: { entry: EntrySlim; isOnline: boole
 
     case 'document':
       return (
-        <Box h={350} style={{
-          backgroundColor: 'var(--mantine-color-default)', borderRadius: 'var(--mantine-radius-sm)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
+        <Box h={200} style={{ ...boxStyle, backgroundColor: 'var(--mantine-color-default)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Stack align="center" gap="xs">
             <IconFileText size={64} stroke={1} style={{ color: info.color }} />
-            <Text size="sm" c="dimmed">
-              {entry.ext === 'pdf' ? 'Première page PDF' : 'Aperçu document'}
-            </Text>
+            <Text size="sm" c="dimmed">{entry.ext?.toUpperCase() ?? 'Document'}</Text>
+            {!isOnline && <Badge size="xs" color="yellow" variant="light">Hors ligne</Badge>}
           </Stack>
         </Box>
       );
 
     default:
       return (
-        <Box h={200} style={{
-          backgroundColor: 'var(--mantine-color-default)', borderRadius: 'var(--mantine-radius-sm)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
+        <Box h={180} style={{ ...boxStyle, backgroundColor: 'var(--mantine-color-default)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Stack align="center" gap="xs">
             <Text fz={48}>{info.icon}</Text>
             <Text size="sm" c="dimmed">Aperçu non disponible</Text>
@@ -216,7 +239,7 @@ export default function QuickLook({
 
       {/* Preview */}
       <Box px="md" py="md">
-        <PreviewContent entry={entry} isOnline={isOnline} />
+        <PreviewContent entry={entry} isOnline={isOnline} entryPath={entryPath} />
       </Box>
 
       {/* Metadata */}

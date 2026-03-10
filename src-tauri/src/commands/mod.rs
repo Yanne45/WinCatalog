@@ -11,7 +11,7 @@ use crossbeam_channel::Sender;
 use rusqlite::{params, OptionalExtension};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{command, AppHandle, Emitter, State};
+use tauri::{command, AppHandle, Emitter, Manager, State};
 
 use crate::core::ai;
 use crate::core::export::{self, ExportScope, ExportStats};
@@ -128,11 +128,21 @@ pub fn search(
     state: State<'_, AppState>,
     query: String,
     limit: Option<i64>,
+    volume_id: Option<i64>,
+    path_prefix: Option<String>,
 ) -> Result<Vec<SearchResult>, String> {
     let lim = limit.unwrap_or(50);
     state
         .db
-        .read(move |c| Ok(queries::search_entries(c, &query, lim)?))
+        .read(move |c| {
+            Ok(queries::search_entries(
+                c,
+                &query,
+                lim,
+                volume_id,
+                path_prefix.as_deref(),
+            )?)
+        })
         .map_err(|e| e.to_string())
 }
 
@@ -1071,6 +1081,144 @@ pub fn get_db_diagnostics(
     state
         .db
         .read(|c| Ok(crate::db::pragmas::get_diagnostics(c)?))
+        .map_err(|e| e.to_string())
+}
+
+// ============================================================================
+// Typed metadata (Inspector)
+// ============================================================================
+
+#[command]
+pub fn get_image_meta(
+    state: State<'_, AppState>,
+    entry_id: i64,
+) -> Result<Option<queries::MetaImage>, String> {
+    state
+        .db
+        .read(move |c| queries::get_image_meta(c, entry_id))
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub fn get_audio_meta(
+    state: State<'_, AppState>,
+    entry_id: i64,
+) -> Result<Option<queries::MetaAudio>, String> {
+    state
+        .db
+        .read(move |c| queries::get_audio_meta(c, entry_id))
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub fn get_video_meta(
+    state: State<'_, AppState>,
+    entry_id: i64,
+) -> Result<Option<queries::MetaVideo>, String> {
+    state
+        .db
+        .read(move |c| queries::get_video_meta(c, entry_id))
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub fn get_doc_meta(
+    state: State<'_, AppState>,
+    entry_id: i64,
+) -> Result<Option<queries::MetaDocument>, String> {
+    state
+        .db
+        .read(move |c| queries::get_doc_meta(c, entry_id))
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub fn get_ai_annotations(
+    state: State<'_, AppState>,
+    entry_id: i64,
+) -> Result<Vec<queries::AiAnnotationRow>, String> {
+    state
+        .db
+        .read(move |c| queries::get_ai_annotations(c, entry_id))
+        .map_err(|e| e.to_string())
+}
+
+// ============================================================================
+// Maintenance (Settings tab)
+// ============================================================================
+
+/// Run PRAGMA optimize + WAL checkpoint to reclaim space and improve perf.
+#[command]
+pub fn optimize_db(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .db
+        .write(|c| {
+            c.execute_batch(
+                "PRAGMA optimize; PRAGMA wal_checkpoint(TRUNCATE);",
+            )
+            .map_err(crate::db::DbError::Sqlite)?;
+            Ok(())
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// Delete all thumbnail cache files. Returns bytes freed.
+#[command]
+pub fn clear_thumb_cache(app: tauri::AppHandle) -> Result<u64, String> {
+    let cache_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("cache")
+        .join("thumbs");
+
+    if !cache_dir.exists() {
+        return Ok(0);
+    }
+
+    fn dir_size(path: &std::path::Path) -> u64 {
+        let mut total = 0u64;
+        if let Ok(rd) = std::fs::read_dir(path) {
+            for entry in rd.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    total += dir_size(&p);
+                } else if let Ok(m) = std::fs::metadata(&p) {
+                    total += m.len();
+                }
+            }
+        }
+        total
+    }
+
+    let freed = dir_size(&cache_dir);
+    std::fs::remove_dir_all(&cache_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
+    Ok(freed)
+}
+
+/// Delete all indexed entries (keeps volumes and settings intact).
+/// Returns the number of entries deleted.
+#[command]
+pub fn reset_index(state: State<'_, AppState>) -> Result<i64, String> {
+    state
+        .db
+        .write(|c| {
+            let count: i64 = c
+                .prepare_cached("SELECT COUNT(*) FROM entries")?
+                .query_row([], |r| r.get(0))
+                .map_err(crate::db::DbError::Sqlite)?;
+            c.execute_batch(
+                "DELETE FROM entry_custom_values;
+                 DELETE FROM entry_tags;
+                 DELETE FROM entry_text;
+                 DELETE FROM scan_log;
+                 DELETE FROM jobs;
+                 DELETE FROM entries;",
+            )
+            .map_err(crate::db::DbError::Sqlite)?;
+            Ok(count)
+        })
         .map_err(|e| e.to_string())
 }
 

@@ -66,7 +66,11 @@ pub fn expand_pattern(
     kind: &str,
     counter: u64,
 ) -> RenameResult<String> {
-    let stem = if let Some(dot) = name.rfind('.') { &name[..dot] } else { name };
+    let stem = if let Some(dot) = name.rfind('.') {
+        &name[..dot]
+    } else {
+        name
+    };
     let ext_str = ext.unwrap_or("");
 
     let mut result = pattern.to_string();
@@ -83,7 +87,12 @@ pub fn expand_pattern(
             let spec = &result[start + 9..start + end];
             let width: usize = spec.parse().unwrap_or(3);
             let formatted = format!("{:0>width$}", counter, width = width);
-            result = format!("{}{}{}", &result[..start], formatted, &result[start + end + 1..]);
+            result = format!(
+                "{}{}{}",
+                &result[..start],
+                formatted,
+                &result[start + end + 1..]
+            );
         }
     }
 
@@ -92,7 +101,12 @@ pub fn expand_pattern(
         if let Some(end) = result[start..].find('}') {
             let fmt = &result[start + 6..start + end];
             let formatted = format_timestamp(mtime.unwrap_or(0), fmt);
-            result = format!("{}{}{}", &result[..start], formatted, &result[start + end + 1..]);
+            result = format!(
+                "{}{}{}",
+                &result[..start],
+                formatted,
+                &result[start + end + 1..]
+            );
         }
     }
 
@@ -130,16 +144,38 @@ fn chrono_from_ts(ts: i64) -> (i32, u32, u32, u32, u32, u32) {
     let mut y = 1970i32;
     let mut remaining = days;
     loop {
-        let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
-        if remaining < days_in_year { break; }
+        let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
+            366
+        } else {
+            365
+        };
+        if remaining < days_in_year {
+            break;
+        }
         remaining -= days_in_year;
         y += 1;
     }
     let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-    let month_days = [0, 31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let month_days = [
+        0,
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut mo = 1u32;
     for i in 1..=12 {
-        if remaining < month_days[i] { break; }
+        if remaining < month_days[i] {
+            break;
+        }
         remaining -= month_days[i];
         mo = (i + 1) as u32;
     }
@@ -159,27 +195,43 @@ pub fn preview_rename(
     pattern: &str,
 ) -> RenameResult<Vec<RenamePreview>> {
     let ids = entry_ids.to_vec();
-    let entries: Vec<(i64, String, String, Option<String>, Option<i64>, String)> = db.read(|conn| {
-        let mut results = Vec::with_capacity(ids.len());
-        let mut stmt = conn.prepare_cached(
-            "SELECT id, name, path, ext, mtime, kind FROM entries WHERE id=?1"
-        )?;
-        for id in &ids {
-            if let Ok(row) = stmt.query_row(params![id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
-            }) {
-                results.push(row);
+    let entries: Vec<(i64, String, String, Option<String>, Option<i64>, String)> =
+        db.read(|conn| {
+            let mut results = Vec::with_capacity(ids.len());
+            let mut stmt = conn.prepare_cached(
+                "SELECT id, name, path, ext, mtime, kind FROM entries WHERE id=?1",
+            )?;
+            for id in &ids {
+                if let Ok(row) = stmt.query_row(params![id], |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                }) {
+                    results.push(row);
+                }
             }
-        }
-        Ok(results)
-    })?;
+            Ok(results)
+        })?;
 
     let mut previews = Vec::with_capacity(entries.len());
     let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (i, (id, name, path, ext, mtime, kind)) in entries.iter().enumerate() {
         let parent = path.rsplit_once(&['/', '\\']).map(|(p, _)| p).unwrap_or("");
-        let new_name = expand_pattern(pattern, name, ext.as_deref(), *mtime, parent, kind, i as u64 + 1)?;
+        let new_name = expand_pattern(
+            pattern,
+            name,
+            ext.as_deref(),
+            *mtime,
+            parent,
+            kind,
+            i as u64 + 1,
+        )?;
 
         let new_path = if let Some((dir, _)) = path.rsplit_once(&['/', '\\']) {
             format!("{}/{}", dir, new_name)
@@ -213,7 +265,11 @@ pub fn apply_rename(
     previews: &[RenamePreview],
     volume_id: i64,
 ) -> RenameResult<RenameStats> {
-    let mut stats = RenameStats { renamed: 0, skipped: 0, errors: 0 };
+    let mut stats = RenameStats {
+        renamed: 0,
+        skipped: 0,
+        errors: 0,
+    };
     let now = ts();
 
     for p in previews {
@@ -237,7 +293,10 @@ pub fn apply_rename(
                 let eid = p.entry_id;
                 let new_name = p.new_name.clone();
                 let new_path_str = p.new_path.clone();
-                let new_parent = new.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+                let new_parent = new
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
                 let new_ext = new.extension().map(|e| e.to_string_lossy().to_lowercase());
                 let old_path = p.old_path.clone();
 
@@ -256,7 +315,9 @@ pub fn apply_rename(
                 });
 
                 match db_result {
-                    Ok(()) => { stats.renamed += 1; }
+                    Ok(()) => {
+                        stats.renamed += 1;
+                    }
                     Err(e) => {
                         // Roll back disk rename to keep consistency
                         log::error!("DB update failed after rename, rolling back: {}", e);
@@ -272,10 +333,18 @@ pub fn apply_rename(
         }
     }
 
-    log::info!("Batch rename: {} renamed, {} skipped, {} errors", stats.renamed, stats.skipped, stats.errors);
+    log::info!(
+        "Batch rename: {} renamed, {} skipped, {} errors",
+        stats.renamed,
+        stats.skipped,
+        stats.errors
+    );
     Ok(stats)
 }
 
 fn ts() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }

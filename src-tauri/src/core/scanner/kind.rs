@@ -30,43 +30,39 @@ pub fn detect_kind(ext: Option<&str>, mime: Option<&str>) -> String {
 fn kind_from_ext(ext: &str) -> Option<&'static str> {
     match ext {
         // Images
-        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "svg" | "ico"
-        | "tiff" | "tif" | "heic" | "heif" | "avif" | "raw" | "cr2"
-        | "nef" | "arw" | "dng" | "psd" | "ai" | "xcf" => Some("image"),
+        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "svg" | "ico" | "tiff" | "tif"
+        | "heic" | "heif" | "avif" | "raw" | "cr2" | "nef" | "arw" | "dng" | "psd" | "ai"
+        | "xcf" => Some("image"),
 
         // Video
-        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" | "m4v"
-        | "mpg" | "mpeg" | "3gp" | "ogv" | "ts" | "vob" => Some("video"),
+        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" | "m4v" | "mpg" | "mpeg" | "3gp"
+        | "ogv" | "ts" | "vob" => Some("video"),
 
         // Audio
-        "mp3" | "flac" | "wav" | "aac" | "ogg" | "wma" | "m4a" | "opus"
-        | "aiff" | "ape" | "alac" | "mid" | "midi" => Some("audio"),
+        "mp3" | "flac" | "wav" | "aac" | "ogg" | "wma" | "m4a" | "opus" | "aiff" | "ape"
+        | "alac" | "mid" | "midi" => Some("audio"),
 
         // Documents
-        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
-        | "odt" | "ods" | "odp" | "rtf" | "pages" | "numbers"
-        | "keynote" | "csv" | "tsv" => Some("document"),
+        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods" | "odp"
+        | "rtf" | "pages" | "numbers" | "keynote" | "csv" | "tsv" => Some("document"),
 
         // Text
-        "txt" | "md" | "markdown" | "rst" | "log" | "ini" | "cfg"
-        | "conf" | "yaml" | "yml" | "toml" | "json" | "xml" | "html"
-        | "htm" | "css" | "js" | "jsx" | "tsx" | "py" | "rs"
-        | "go" | "java" | "c" | "cpp" | "h" | "hpp" | "cs" | "rb"
-        | "php" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat"
-        | "cmd" | "sql" | "r" | "swift" | "kt" | "scala" | "lua"
-        | "pl" | "ex" | "exs" | "hs" | "ml" | "vim" | "tex"
-        | "bib" | "srt" | "sub" | "ass" | "nfo" => Some("text"),
+        "txt" | "md" | "markdown" | "rst" | "log" | "ini" | "cfg" | "conf" | "yaml" | "yml"
+        | "toml" | "json" | "xml" | "html" | "htm" | "css" | "js" | "jsx" | "tsx" | "py" | "rs"
+        | "go" | "java" | "c" | "cpp" | "h" | "hpp" | "cs" | "rb" | "php" | "sh" | "bash"
+        | "zsh" | "fish" | "ps1" | "bat" | "cmd" | "sql" | "r" | "swift" | "kt" | "scala"
+        | "lua" | "pl" | "ex" | "exs" | "hs" | "ml" | "vim" | "tex" | "bib" | "srt" | "sub"
+        | "ass" | "nfo" => Some("text"),
 
         // Archives
-        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "zst"
-        | "lz4" | "lzma" | "cab" | "iso" | "dmg" | "img" => Some("archive"),
+        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "zst" | "lz4" | "lzma" | "cab"
+        | "iso" | "dmg" | "img" => Some("archive"),
 
         // Fonts
         "ttf" | "otf" | "woff" | "woff2" | "eot" => Some("font"),
 
         // Ebooks
-        "epub" | "mobi" | "azw" | "azw3" | "fb2" | "djvu"
-        | "cbz" | "cbr" => Some("ebook"),
+        "epub" | "mobi" | "azw" | "azw3" | "fb2" | "djvu" | "cbz" | "cbr" => Some("ebook"),
 
         _ => None,
     }

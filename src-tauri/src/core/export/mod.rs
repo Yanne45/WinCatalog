@@ -41,12 +41,22 @@ pub enum ExportScope {
 
 impl ExportScope {
     pub fn from_str(s: &str) -> ExportResult<Self> {
-        if s == "full" { return Ok(Self::Full); }
+        if s == "full" {
+            return Ok(Self::Full);
+        }
         if let Some(id) = s.strip_prefix("volume:") {
-            return Ok(Self::Volume { id: id.parse().map_err(|_| ExportError::InvalidScope(s.into()))? });
+            return Ok(Self::Volume {
+                id: id
+                    .parse()
+                    .map_err(|_| ExportError::InvalidScope(s.into()))?,
+            });
         }
         if let Some(id) = s.strip_prefix("collection:") {
-            return Ok(Self::Collection { id: id.parse().map_err(|_| ExportError::InvalidScope(s.into()))? });
+            return Ok(Self::Collection {
+                id: id
+                    .parse()
+                    .map_err(|_| ExportError::InvalidScope(s.into()))?,
+            });
         }
         Err(ExportError::InvalidScope(s.into()))
     }
@@ -78,7 +88,11 @@ pub struct ExportStats {
 // SQLite export (backup)
 // ============================================================================
 
-pub fn export_sqlite(db: &Database, output_path: &Path, scope: &ExportScope) -> ExportResult<ExportStats> {
+pub fn export_sqlite(
+    db: &Database,
+    output_path: &Path,
+    scope: &ExportScope,
+) -> ExportResult<ExportStats> {
     let start = std::time::Instant::now();
 
     // For full export: use SQLite backup API
@@ -90,7 +104,8 @@ pub fn export_sqlite(db: &Database, output_path: &Path, scope: &ExportScope) -> 
             let dst = output_path.to_path_buf();
             db.write(move |conn| {
                 conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
-                std::fs::copy(&src, &dst).map_err(|e| DbError::Execution(format!("Copy failed: {}", e)))?;
+                std::fs::copy(&src, &dst)
+                    .map_err(|e| DbError::Execution(format!("Copy failed: {}", e)))?;
                 Ok(())
             })?;
         }
@@ -100,11 +115,14 @@ pub fn export_sqlite(db: &Database, output_path: &Path, scope: &ExportScope) -> 
             let export_conn = rusqlite::Connection::open(output_path)
                 .map_err(|e| ExportError::Db(DbError::Sqlite(e)))?;
             let vid = *id;
-            export_conn.execute("DELETE FROM entries WHERE volume_id != ?1", params![vid])
+            export_conn
+                .execute("DELETE FROM entries WHERE volume_id != ?1", params![vid])
                 .map_err(|e| ExportError::Db(DbError::Sqlite(e)))?;
-            export_conn.execute("DELETE FROM volumes WHERE id != ?1", params![vid])
+            export_conn
+                .execute("DELETE FROM volumes WHERE id != ?1", params![vid])
                 .map_err(|e| ExportError::Db(DbError::Sqlite(e)))?;
-            export_conn.execute_batch("VACUUM")
+            export_conn
+                .execute_batch("VACUUM")
                 .map_err(|e| ExportError::Db(DbError::Sqlite(e)))?;
         }
         ExportScope::Collection { .. } => {
@@ -149,7 +167,11 @@ struct JsonEntry {
     full_hash: Option<String>,
 }
 
-pub fn export_json(db: &Database, output_path: &Path, scope: &ExportScope) -> ExportResult<ExportStats> {
+pub fn export_json(
+    db: &Database,
+    output_path: &Path,
+    scope: &ExportScope,
+) -> ExportResult<ExportStats> {
     let start = std::time::Instant::now();
 
     let (where_clause, param_val) = scope_to_where(scope);
@@ -166,7 +188,8 @@ pub fn export_json(db: &Database, output_path: &Path, scope: &ExportScope) -> Ex
             stmt.query_map(params![id], map_json_entry)?
         } else {
             stmt.query_map([], map_json_entry)?
-        }.filter_map(|r| r.ok()).collect();
+        }
+        .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     })?;
 
@@ -192,11 +215,18 @@ pub fn export_json(db: &Database, output_path: &Path, scope: &ExportScope) -> Ex
 
 fn map_json_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<JsonEntry> {
     Ok(JsonEntry {
-        id: row.get(0)?, volume: row.get(1)?, path: row.get(2)?,
-        name: row.get(3)?, is_dir: row.get::<_, i32>(4)? != 0,
-        kind: row.get(5)?, ext: row.get(6)?, size_bytes: row.get(7)?,
-        mtime: row.get(8)?, status: row.get(9)?,
-        quick_hash: row.get(10)?, full_hash: row.get(11)?,
+        id: row.get(0)?,
+        volume: row.get(1)?,
+        path: row.get(2)?,
+        name: row.get(3)?,
+        is_dir: row.get::<_, i32>(4)? != 0,
+        kind: row.get(5)?,
+        ext: row.get(6)?,
+        size_bytes: row.get(7)?,
+        mtime: row.get(8)?,
+        status: row.get(9)?,
+        quick_hash: row.get(10)?,
+        full_hash: row.get(11)?,
     })
 }
 
@@ -204,7 +234,11 @@ fn map_json_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<JsonEntry> {
 // CSV export
 // ============================================================================
 
-pub fn export_csv(db: &Database, output_path: &Path, scope: &ExportScope) -> ExportResult<ExportStats> {
+pub fn export_csv(
+    db: &Database,
+    output_path: &Path,
+    scope: &ExportScope,
+) -> ExportResult<ExportStats> {
     let start = std::time::Instant::now();
 
     let (where_clause, param_val) = scope_to_where(scope);
@@ -213,7 +247,10 @@ pub fn export_csv(db: &Database, output_path: &Path, scope: &ExportScope) -> Exp
     let mut writer = BufWriter::new(file);
 
     // Header
-    writeln!(writer, "id,volume,path,name,is_dir,kind,ext,size_bytes,mtime,status,quick_hash,full_hash")?;
+    writeln!(
+        writer,
+        "id,volume,path,name,is_dir,kind,ext,size_bytes,mtime,status,quick_hash,full_hash"
+    )?;
 
     let count = db.read(|conn| {
         let sql = format!(
@@ -226,18 +263,44 @@ pub fn export_csv(db: &Database, output_path: &Path, scope: &ExportScope) -> Exp
 
         type Row = (i64, String, String, String, i32, String, Option<String>, i64, Option<i64>, String, Option<String>, Option<String>);
         let rows: Vec<Row> = if let Some(id) = param_val {
-            let r: Vec<Row> = stmt.query_map(params![id], |r| Ok((
-                r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?,
-                r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?,
-                r.get(10)?, r.get(11)?,
-            )))?.filter_map(|r| r.ok()).collect();
+            let r: Vec<Row> = stmt
+                .query_map(params![id], |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                        r.get(8)?,
+                        r.get(9)?,
+                        r.get(10)?,
+                        r.get(11)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             r
         } else {
-            let r: Vec<Row> = stmt.query_map([], |r| Ok((
-                r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?,
-                r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?,
-                r.get(10)?, r.get(11)?,
-            )))?.filter_map(|r| r.ok()).collect();
+            let r: Vec<Row> = stmt
+                .query_map([], |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                        r.get(8)?,
+                        r.get(9)?,
+                        r.get(10)?,
+                        r.get(11)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             r
         };
 
@@ -290,7 +353,9 @@ fn scope_to_where(scope: &ExportScope) -> (String, Option<i64>) {
         ExportScope::Full => (String::new(), None),
         ExportScope::Volume { id } => (" AND e.volume_id = ?1".into(), Some(*id)),
         ExportScope::Collection { id } => (
-            format!(" AND e.id IN (SELECT entry_id FROM collection_entries WHERE collection_id = ?1)"),
+            format!(
+                " AND e.id IN (SELECT entry_id FROM collection_entries WHERE collection_id = ?1)"
+            ),
             Some(*id),
         ),
     }
@@ -299,16 +364,26 @@ fn scope_to_where(scope: &ExportScope) -> (String, Option<i64>) {
 fn count_entries(db: &Database, scope: &ExportScope) -> ExportResult<u64> {
     let (where_clause, param_val) = scope_to_where(scope);
     Ok(db.read(|conn| {
-        let sql = format!("SELECT COUNT(*) FROM entries e WHERE e.status='present' {}", where_clause);
+        let sql = format!(
+            "SELECT COUNT(*) FROM entries e WHERE e.status='present' {}",
+            where_clause
+        );
         if let Some(id) = param_val {
-            conn.query_row(&sql, params![id], |r| r.get::<_, i64>(0)).map_err(crate::db::DbError::Sqlite)
+            conn.query_row(&sql, params![id], |r| r.get::<_, i64>(0))
+                .map_err(crate::db::DbError::Sqlite)
         } else {
-            conn.query_row(&sql, [], |r| r.get::<_, i64>(0)).map_err(crate::db::DbError::Sqlite)
+            conn.query_row(&sql, [], |r| r.get::<_, i64>(0))
+                .map_err(crate::db::DbError::Sqlite)
         }
     })? as u64)
 }
 
-fn record_export(db: &Database, format: &str, scope: &ExportScope, path: &Path) -> ExportResult<()> {
+fn record_export(
+    db: &Database,
+    format: &str,
+    scope: &ExportScope,
+    path: &Path,
+) -> ExportResult<()> {
     let now = ts();
     let fmt = format.to_string();
     let sc = scope.as_str();
@@ -324,5 +399,8 @@ fn record_export(db: &Database, format: &str, scope: &ExportScope, path: &Path) 
 }
 
 fn ts() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }
