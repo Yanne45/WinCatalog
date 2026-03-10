@@ -1,0 +1,34 @@
+/* ============================================================================
+   WinCatalog — global.css
+   Utility classes for hover states (replaces inline onMouseEnter/onMouseLeave)
+   ============================================================================ */
+
+/* Hoverable row/item — transparent by default, subtle bg on hover */
+.wc-hoverable {
+  transition: background-color 80ms ease-out;
+}
+.wc-hoverable:not([data-active="true"]):hover {
+  background-color: var(--mantine-color-default-hover);
+}
+
+/* Sidebar nav item */
+.wc-nav-item {
+  transition: background-color 120ms ease-out;
+}
+.wc-nav-item:not([data-active="true"]):hover {
+  background-color: var(--mantine-color-default-hover);
+}
+
+/* Card with border highlight on hover */
+.wc-card-hover {
+  transition: border-color 120ms ease-out;
+}
+.wc-card-hover:hover {
+  border-color: var(--mantine-color-primary-7) !important;
+}
+
+/* Focus outline for keyboard navigation */
+.wc-focusable:focus-visible {
+  outline: 2px solid var(--mantine-color-primary-4);
+  outline-offset: -2px;
+}

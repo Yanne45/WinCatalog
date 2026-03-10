@@ -12,7 +12,6 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -20,7 +19,7 @@ use crossbeam_channel::{bounded, select, Receiver, Sender};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rusqlite::params;
 
-use crate::db::{Database, DbError, DbResult};
+use crate::db::Database;
 
 // ============================================================================
 // Types

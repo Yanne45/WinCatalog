@@ -114,9 +114,9 @@ pub fn run_rules_post_scan(
     }
 
     // Load entries that were added or modified in this scan
-    let entries: Vec<(i64, String, String, Option<String>, i64, Option<i64>, Option<i64>)> = db.read(|conn| {
+    let entries: Vec<(i64, String, String, String, Option<String>, i64, Option<i64>, Option<i64>)> = db.read(|conn| {
         let mut stmt = conn.prepare_cached(
-            "SELECT e.id, e.name, e.kind, e.ext, e.size_bytes, e.mtime, e.atime
+            "SELECT e.id, e.name, e.path, e.kind, e.ext, e.size_bytes, e.mtime, e.atime
              FROM entries e
              JOIN scan_log sl ON sl.entry_id = e.id
              WHERE sl.volume_id = ?1 AND sl.scan_id = ?2
@@ -124,7 +124,7 @@ pub fn run_rules_post_scan(
                AND e.status = 'present'"
         )?;
         let rows = stmt.query_map(params![volume_id, scan_id], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
         })?.filter_map(|r| r.ok()).collect();
         Ok(rows)
     })?;
@@ -132,9 +132,9 @@ pub fn run_rules_post_scan(
     let mut stats = RuleStats { rules_evaluated: enabled.len() as u64, entries_matched: 0, actions_applied: 0 };
     let now = ts();
 
-    for (entry_id, name, kind, ext, size, mtime, atime) in &entries {
+    for (entry_id, name, path, kind, ext, size, mtime, atime) in &entries {
         for rule in &enabled {
-            if evaluate_conditions(&rule.conditions, &name, &kind, ext.as_deref(), *size, *mtime, *atime, now) {
+            if evaluate_conditions(&rule.conditions, &name, &path, &kind, ext.as_deref(), *size, *mtime, *atime, now) {
                 stats.entries_matched += 1;
                 for action in &rule.actions {
                     if apply_action(db, *entry_id, action, now).is_ok() {
@@ -159,7 +159,7 @@ pub fn run_rules_post_scan(
 
 fn evaluate_conditions(
     conditions: &[Condition],
-    name: &str, kind: &str, ext: Option<&str>, size: i64,
+    name: &str, path: &str, kind: &str, ext: Option<&str>, size: i64,
     mtime: Option<i64>, atime: Option<i64>, now: i64,
 ) -> bool {
     // All conditions must match (AND logic)
@@ -168,7 +168,7 @@ fn evaluate_conditions(
         Condition::Extension { value } => ext.map(|e| e.eq_ignore_ascii_case(value)).unwrap_or(false),
         Condition::SizeGreaterThan { bytes } => size > *bytes,
         Condition::SizeLessThan { bytes } => size < *bytes,
-        Condition::PathContains { value } => name.to_lowercase().contains(&value.to_lowercase()),
+        Condition::PathContains { value } => path.to_lowercase().contains(&value.to_lowercase()),
         Condition::NameContains { value } => name.to_lowercase().contains(&value.to_lowercase()),
         Condition::NotAccessedSince { days } => {
             let threshold = now - (days * 86400);

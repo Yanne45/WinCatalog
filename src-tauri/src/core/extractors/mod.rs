@@ -15,7 +15,7 @@ use id3::TagLike;
 use rusqlite::params;
 use thiserror::Error;
 
-use crate::db::{Database, DbError, DbResult};
+use crate::db::{Database, DbError};
 
 #[derive(Error, Debug)]
 pub enum ExtractError {
@@ -36,63 +36,8 @@ pub type ExtractResult<T> = Result<T, ExtractError>;
 // ============================================================================
 
 pub fn extract_image_meta(db: &Database, entry_id: i64, path: &Path) -> ExtractResult<()> {
-    let file = std::fs::File::open(path)?;
-    let mut reader = std::io::BufReader::new(&file);
-
-    let exif = exif::Reader::new()
-        .read_from_container(&mut reader)
-        .map_err(|e| ExtractError::Parse(format!("EXIF: {}", e)))?;
-
-    let get_str = |tag: exif::Tag| -> Option<String> {
-        exif.get_field(tag, exif::In::PRIMARY)
-            .map(|f| f.display_value().with_unit(&exif).to_string())
-    };
-    let get_u32 = |tag: exif::Tag| -> Option<u32> {
-        exif.get_field(tag, exif::In::PRIMARY)
-            .and_then(|f| match f.value {
-                exif::Value::Long(ref v) if !v.is_empty() => Some(v[0]),
-                exif::Value::Short(ref v) if !v.is_empty() => Some(v[0] as u32),
-                _ => None,
-            })
-    };
-    let get_rational = |tag: exif::Tag| -> Option<f64> {
-        exif.get_field(tag, exif::In::PRIMARY)
-            .and_then(|f| match f.value {
-                exif::Value::Rational(ref v) if !v.is_empty() => Some(v[0].num as f64 / v[0].denom.max(1) as f64),
-                _ => None,
-            })
-    };
-
-    let width = get_u32(exif::Tag::PixelXDimension).or(get_u32(exif::Tag::ImageWidth));
-    let height = get_u32(exif::Tag::PixelYDimension).or(get_u32(exif::Tag::ImageLength));
-    let orientation = get_u32(exif::Tag::Orientation);
-    let camera_make = get_str(exif::Tag::Make);
-    let camera_model = get_str(exif::Tag::Model);
-    let iso = get_u32(exif::Tag::PhotographicSensitivity);
-    let focal_length = get_rational(exif::Tag::FocalLength);
-    let aperture = get_rational(exif::Tag::FNumber);
-    let shutter_speed = get_str(exif::Tag::ExposureTime);
-    let color_space = get_str(exif::Tag::ColorSpace);
-
-    // GPS
-    let (gps_lat, gps_lon) = extract_gps(&exif);
-
-    // Date taken
-    let taken_at = exif.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
-        .and_then(|f| parse_exif_datetime(&f.display_value().to_string()));
-
-    db.write(move |conn| {
-        conn.execute(
-            "INSERT OR REPLACE INTO meta_image (entry_id, width, height, orientation, color_space,
-             camera_make, camera_model, iso, focal_length, aperture, shutter_speed,
-             gps_lat, gps_lon, taken_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
-            params![entry_id, width, height, orientation, color_space,
-                    camera_make, camera_model, iso, focal_length, aperture, shutter_speed,
-                    gps_lat, gps_lon, taken_at],
-        )?;
-        Ok(())
-    })?;
+    let row = collect_image_meta(entry_id, path)?;
+    flush_meta_batch(db, &mut vec![row])?;
     Ok(())
 }
 
@@ -150,23 +95,8 @@ fn month_days(m: i64) -> i64 {
 // ============================================================================
 
 pub fn extract_audio_meta(db: &Database, entry_id: i64, path: &Path, ext: &str) -> ExtractResult<()> {
-    let meta = match ext {
-        "mp3" => extract_id3(path)?,
-        "flac" => extract_flac(path)?,
-        _ => extract_audio_ffprobe(path)?,
-    };
-
-    db.write(move |conn| {
-        conn.execute(
-            "INSERT OR REPLACE INTO meta_audio (entry_id, duration_ms, artist, album, title,
-             track_number, genre, year, bitrate, sample_rate, channels)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-            params![entry_id, meta.duration_ms, meta.artist, meta.album, meta.title,
-                    meta.track_number, meta.genre, meta.year, meta.bitrate,
-                    meta.sample_rate, meta.channels],
-        )?;
-        Ok(())
-    })?;
+    let row = collect_audio_meta(entry_id, path, ext)?;
+    flush_meta_batch(db, &mut vec![row])?;
     Ok(())
 }
 
@@ -213,7 +143,7 @@ fn extract_flac(path: &Path) -> ExtractResult<AudioMeta> {
         title: get("TITLE"),
         track_number: get("TRACKNUMBER").and_then(|s| s.parse().ok()),
         genre: get("GENRE"),
-        year: get("DATE").and_then(|s| s[..4].parse().ok()),
+        year: get("DATE").and_then(|s| s.get(..4)?.parse().ok()),
         bitrate: si.map(|s| s.bits_per_sample as i32),
         sample_rate: si.map(|s| s.sample_rate as i32),
         channels: si.map(|s| s.num_channels as i32),
@@ -229,7 +159,7 @@ fn extract_audio_ffprobe(path: &Path) -> ExtractResult<AudioMeta> {
         title: info.tags.get("title").cloned(),
         track_number: info.tags.get("track").and_then(|s| s.split('/').next()?.parse().ok()),
         genre: info.tags.get("genre").cloned(),
-        year: info.tags.get("date").and_then(|s| s[..4].parse().ok()),
+        year: info.tags.get("date").and_then(|s| s.get(..4)?.parse().ok()),
         bitrate: info.bitrate,
         sample_rate: info.sample_rate,
         channels: info.channels,
@@ -241,18 +171,8 @@ fn extract_audio_ffprobe(path: &Path) -> ExtractResult<AudioMeta> {
 // ============================================================================
 
 pub fn extract_video_meta(db: &Database, entry_id: i64, path: &Path) -> ExtractResult<()> {
-    let info = run_ffprobe(path)?;
-
-    db.write(move |conn| {
-        conn.execute(
-            "INSERT OR REPLACE INTO meta_video (entry_id, duration_ms, width, height, fps,
-             video_codec, audio_codec, bitrate, container)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-            params![entry_id, info.duration_ms, info.width, info.height, info.fps,
-                    info.video_codec, info.audio_codec, info.bitrate, info.container],
-        )?;
-        Ok(())
-    })?;
+    let row = collect_video_meta(entry_id, path)?;
+    flush_meta_batch(db, &mut vec![row])?;
     Ok(())
 }
 
@@ -261,20 +181,8 @@ pub fn extract_video_meta(db: &Database, entry_id: i64, path: &Path) -> ExtractR
 // ============================================================================
 
 pub fn extract_document_meta(db: &Database, entry_id: i64, path: &Path, ext: &str) -> ExtractResult<()> {
-    let (page_count, title, author) = match ext {
-        "pdf" => extract_pdf_meta(path)?,
-        _ => (None, None, None),
-    };
-
-    let ext = ext.to_string();
-    db.write(move |conn| {
-        conn.execute(
-            "INSERT OR REPLACE INTO meta_document (entry_id, format, page_count, title, author)
-             VALUES (?1,?2,?3,?4,?5)",
-            params![entry_id, ext, page_count, title, author],
-        )?;
-        Ok(())
-    })?;
+    let row = collect_document_meta(entry_id, path, ext)?;
+    flush_meta_batch(db, &mut vec![row])?;
     Ok(())
 }
 
@@ -311,6 +219,21 @@ fn extract_pdf_meta(path: &Path) -> ExtractResult<(Option<i32>, Option<String>, 
 // Batch extractor: run for a volume + kind
 // ============================================================================
 
+/// Extracted metadata ready for batch insert.
+enum MetaRow {
+    Image {
+        entry_id: i64, width: Option<u32>, height: Option<u32>, orientation: Option<u32>,
+        color_space: Option<String>, camera_make: Option<String>, camera_model: Option<String>,
+        iso: Option<u32>, focal_length: Option<f64>, aperture: Option<f64>,
+        shutter_speed: Option<String>, gps_lat: Option<f64>, gps_lon: Option<f64>, taken_at: Option<i64>,
+    },
+    Audio { entry_id: i64, meta: AudioMeta },
+    Video { entry_id: i64, info: FfprobeInfo },
+    Document { entry_id: i64, format: String, page_count: Option<i32>, title: Option<String>, author: Option<String> },
+}
+
+const EXTRACT_BATCH_SIZE: usize = 100;
+
 pub fn run_extract_meta(
     db: &Database,
     volume_id: i64,
@@ -333,6 +256,7 @@ pub fn run_extract_meta(
 
     let mut extracted = 0u64;
     let mut errors = 0u64;
+    let mut batch: Vec<MetaRow> = Vec::with_capacity(EXTRACT_BATCH_SIZE);
 
     for (entry_id, path_str, ext) in &entries {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) { break; }
@@ -341,22 +265,155 @@ pub fn run_extract_meta(
         if !path.exists() { continue; }
 
         let ext_str = ext.as_deref().unwrap_or("");
-        let result = match kind {
-            "image" => extract_image_meta(db, *entry_id, path),
-            "audio" => extract_audio_meta(db, *entry_id, path, ext_str),
-            "video" => extract_video_meta(db, *entry_id, path),
-            "document" => extract_document_meta(db, *entry_id, path, ext_str),
+        let row = match kind {
+            "image" => collect_image_meta(*entry_id, path),
+            "audio" => collect_audio_meta(*entry_id, path, ext_str),
+            "video" => collect_video_meta(*entry_id, path),
+            "document" => collect_document_meta(*entry_id, path, ext_str),
             _ => { errors += 1; continue; }
         };
 
-        match result {
-            Ok(()) => extracted += 1,
+        match row {
+            Ok(r) => { extracted += 1; batch.push(r); }
             Err(e) => { errors += 1; log::debug!("Extract meta error for {}: {}", path_str, e); }
         }
+
+        if batch.len() >= EXTRACT_BATCH_SIZE {
+            flush_meta_batch(db, &mut batch)?;
+        }
+    }
+
+    if !batch.is_empty() {
+        flush_meta_batch(db, &mut batch)?;
     }
 
     log::info!("extract_meta kind={}: {} extracted, {} errors", kind, extracted, errors);
     Ok((extracted, errors))
+}
+
+/// Batch-write collected metadata rows in a single transaction.
+fn flush_meta_batch(db: &Database, batch: &mut Vec<MetaRow>) -> ExtractResult<()> {
+    let rows: Vec<MetaRow> = batch.drain(..).collect();
+    db.write_transaction(move |tx| {
+        for row in &rows {
+            match row {
+                MetaRow::Image { entry_id, width, height, orientation, color_space,
+                    camera_make, camera_model, iso, focal_length, aperture,
+                    shutter_speed, gps_lat, gps_lon, taken_at } => {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO meta_image (entry_id, width, height, orientation, color_space,
+                         camera_make, camera_model, iso, focal_length, aperture, shutter_speed,
+                         gps_lat, gps_lon, taken_at)
+                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                        params![entry_id, width, height, orientation, color_space,
+                                camera_make, camera_model, iso, focal_length, aperture, shutter_speed,
+                                gps_lat, gps_lon, taken_at],
+                    ).map_err(DbError::Sqlite)?;
+                }
+                MetaRow::Audio { entry_id, meta } => {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO meta_audio (entry_id, duration_ms, artist, album, title,
+                         track_number, genre, year, bitrate, sample_rate, channels)
+                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                        params![entry_id, meta.duration_ms, meta.artist, meta.album, meta.title,
+                                meta.track_number, meta.genre, meta.year, meta.bitrate,
+                                meta.sample_rate, meta.channels],
+                    ).map_err(DbError::Sqlite)?;
+                }
+                MetaRow::Video { entry_id, info } => {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO meta_video (entry_id, duration_ms, width, height, fps,
+                         video_codec, audio_codec, bitrate, container)
+                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                        params![entry_id, info.duration_ms, info.width, info.height, info.fps,
+                                info.video_codec, info.audio_codec, info.bitrate, info.container],
+                    ).map_err(DbError::Sqlite)?;
+                }
+                MetaRow::Document { entry_id, format, page_count, title, author } => {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO meta_document (entry_id, format, page_count, title, author)
+                         VALUES (?1,?2,?3,?4,?5)",
+                        params![entry_id, format, page_count, title, author],
+                    ).map_err(DbError::Sqlite)?;
+                }
+            }
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+// ============================================================================
+// Collect-only extractors (no DB write — returns MetaRow for batching)
+// ============================================================================
+
+fn collect_image_meta(entry_id: i64, path: &Path) -> ExtractResult<MetaRow> {
+    let file = std::fs::File::open(path)?;
+    let mut reader = std::io::BufReader::new(&file);
+    let exif = exif::Reader::new()
+        .read_from_container(&mut reader)
+        .map_err(|e| ExtractError::Parse(format!("EXIF: {}", e)))?;
+
+    let get_str = |tag: exif::Tag| -> Option<String> {
+        exif.get_field(tag, exif::In::PRIMARY)
+            .map(|f| f.display_value().with_unit(&exif).to_string())
+    };
+    let get_u32 = |tag: exif::Tag| -> Option<u32> {
+        exif.get_field(tag, exif::In::PRIMARY)
+            .and_then(|f| match f.value {
+                exif::Value::Long(ref v) if !v.is_empty() => Some(v[0]),
+                exif::Value::Short(ref v) if !v.is_empty() => Some(v[0] as u32),
+                _ => None,
+            })
+    };
+    let get_rational = |tag: exif::Tag| -> Option<f64> {
+        exif.get_field(tag, exif::In::PRIMARY)
+            .and_then(|f| match f.value {
+                exif::Value::Rational(ref v) if !v.is_empty() => Some(v[0].num as f64 / v[0].denom.max(1) as f64),
+                _ => None,
+            })
+    };
+
+    let (gps_lat, gps_lon) = extract_gps(&exif);
+    let taken_at = exif.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
+        .and_then(|f| parse_exif_datetime(&f.display_value().to_string()));
+
+    Ok(MetaRow::Image {
+        entry_id,
+        width: get_u32(exif::Tag::PixelXDimension).or(get_u32(exif::Tag::ImageWidth)),
+        height: get_u32(exif::Tag::PixelYDimension).or(get_u32(exif::Tag::ImageLength)),
+        orientation: get_u32(exif::Tag::Orientation),
+        color_space: get_str(exif::Tag::ColorSpace),
+        camera_make: get_str(exif::Tag::Make),
+        camera_model: get_str(exif::Tag::Model),
+        iso: get_u32(exif::Tag::PhotographicSensitivity),
+        focal_length: get_rational(exif::Tag::FocalLength),
+        aperture: get_rational(exif::Tag::FNumber),
+        shutter_speed: get_str(exif::Tag::ExposureTime),
+        gps_lat, gps_lon, taken_at,
+    })
+}
+
+fn collect_audio_meta(entry_id: i64, path: &Path, ext: &str) -> ExtractResult<MetaRow> {
+    let meta = match ext {
+        "mp3" => extract_id3(path)?,
+        "flac" => extract_flac(path)?,
+        _ => extract_audio_ffprobe(path)?,
+    };
+    Ok(MetaRow::Audio { entry_id, meta })
+}
+
+fn collect_video_meta(entry_id: i64, path: &Path) -> ExtractResult<MetaRow> {
+    let info = run_ffprobe(path)?;
+    Ok(MetaRow::Video { entry_id, info })
+}
+
+fn collect_document_meta(entry_id: i64, path: &Path, ext: &str) -> ExtractResult<MetaRow> {
+    let (page_count, title, author) = match ext {
+        "pdf" => extract_pdf_meta(path)?,
+        _ => (None, None, None),
+    };
+    Ok(MetaRow::Document { entry_id, format: ext.to_string(), page_count, title, author })
 }
 
 // ============================================================================

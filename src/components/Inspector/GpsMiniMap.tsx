@@ -126,7 +126,7 @@ export default function GpsMiniMap({ lat, lon, zoom = 13 }: GpsMiniMapProps) {
           borderRadius: 'var(--mantine-radius-sm)',
           overflow: 'hidden',
           position: 'relative',
-          backgroundColor: 'var(--mantine-color-dark-6)',
+          backgroundColor: 'var(--mantine-color-default)',
         }}
       >
         {/* Tile grid (positioned to show the pin area) */}
@@ -172,7 +172,7 @@ export default function GpsMiniMap({ lat, lon, zoom = 13 }: GpsMiniMapProps) {
         </Box>
 
         {/* Attribution (required by OSM) */}
-        <Text size={8} c="dimmed" style={{
+        <Text fz={8} c="dimmed" style={{
           position: 'absolute', bottom: 2, right: 4, zIndex: 5,
           backgroundColor: 'rgba(0,0,0,0.5)', padding: '0 3px', borderRadius: 2,
         }}>

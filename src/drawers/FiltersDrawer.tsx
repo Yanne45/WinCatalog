@@ -108,7 +108,7 @@ export default function FiltersDrawer({ opened, onClose, filters, onApply }: Fil
         {activeCount > 0 && <Badge size="sm" color="primary">{activeCount}</Badge>}
       </Group>
     } position="right" size="sm"
-      styles={{ content: { backgroundColor: 'var(--mantine-color-dark-7)' }, header: { backgroundColor: 'var(--mantine-color-dark-7)' } }}>
+      styles={{ content: { backgroundColor: 'var(--mantine-color-body)' }, header: { backgroundColor: 'var(--mantine-color-body)' } }}>
       <Stack gap="md">
         {/* Kind filter */}
         <div>
@@ -130,7 +130,7 @@ export default function FiltersDrawer({ opened, onClose, filters, onApply }: Fil
           </Group>
         </div>
 
-        <Divider color="var(--mantine-color-dark-5)" />
+        <Divider color="var(--mantine-color-default-border)" />
 
         {/* Size filter */}
         <div>
@@ -155,7 +155,7 @@ export default function FiltersDrawer({ opened, onClose, filters, onApply }: Fil
           </Group>
         </div>
 
-        <Divider color="var(--mantine-color-dark-5)" />
+        <Divider color="var(--mantine-color-default-border)" />
 
         {/* Tags */}
         {allTags.length > 0 && (
@@ -167,7 +167,7 @@ export default function FiltersDrawer({ opened, onClose, filters, onApply }: Fil
           </div>
         )}
 
-        <Divider color="var(--mantine-color-dark-5)" />
+        <Divider color="var(--mantine-color-default-border)" />
 
         {/* Status */}
         <div>
@@ -187,7 +187,7 @@ export default function FiltersDrawer({ opened, onClose, filters, onApply }: Fil
           checked={local.hasHash === true}
           onChange={() => update('hasHash', local.hasHash === true ? null : true)} />
 
-        <Divider color="var(--mantine-color-dark-5)" />
+        <Divider color="var(--mantine-color-default-border)" />
 
         {/* Actions */}
         <Group gap="sm">

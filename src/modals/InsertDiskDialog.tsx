@@ -109,7 +109,7 @@ export default function InsertDiskDialog({
         <Box
           p="md"
           style={{
-            backgroundColor: 'var(--mantine-color-dark-6)',
+            backgroundColor: 'var(--mantine-color-default)',
             borderRadius: 'var(--mantine-radius-sm)',
           }}
         >
@@ -153,7 +153,7 @@ export default function InsertDiskDialog({
               gap="xs"
               p="xs"
               style={{
-                backgroundColor: 'var(--mantine-color-dark-6)',
+                backgroundColor: 'var(--mantine-color-default)',
                 borderRadius: 'var(--mantine-radius-xs)',
               }}
             >
@@ -170,7 +170,7 @@ export default function InsertDiskDialog({
           <Box
             p="sm"
             style={{
-              backgroundColor: 'var(--mantine-color-green-9)',
+              backgroundColor: 'var(--mantine-color-green-light)',
               borderRadius: 'var(--mantine-radius-sm)',
               border: '1px solid var(--mantine-color-green-7)',
             }}
@@ -191,7 +191,7 @@ export default function InsertDiskDialog({
           </Text>
         )}
 
-        <Divider color="var(--mantine-color-dark-5)" />
+        <Divider color="var(--mantine-color-default-border)" />
 
         {/* Actions */}
         <Group justify="space-between">

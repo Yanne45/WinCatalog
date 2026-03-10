@@ -530,11 +530,11 @@ pub fn get_recent_scan_log(conn: &Connection, volume_id: Option<i64>, event_filt
         (Some(_), Some(_)) =>
             "SELECT id,volume_id,entry_id,event,new_path,old_path,new_size,detected_at FROM scan_log WHERE volume_id=?1 AND event=?2 ORDER BY detected_at DESC LIMIT ?3",
         (Some(_), None) =>
-            "SELECT id,volume_id,entry_id,event,new_path,old_path,new_size,detected_at FROM scan_log WHERE volume_id=?1 ORDER BY detected_at DESC LIMIT ?3",
+            "SELECT id,volume_id,entry_id,event,new_path,old_path,new_size,detected_at FROM scan_log WHERE volume_id=?1 ORDER BY detected_at DESC LIMIT ?2",
         (None, Some(_)) =>
-            "SELECT id,volume_id,entry_id,event,new_path,old_path,new_size,detected_at FROM scan_log WHERE event=?2 ORDER BY detected_at DESC LIMIT ?3",
+            "SELECT id,volume_id,entry_id,event,new_path,old_path,new_size,detected_at FROM scan_log WHERE event=?1 ORDER BY detected_at DESC LIMIT ?2",
         (None, None) =>
-            "SELECT id,volume_id,entry_id,event,new_path,old_path,new_size,detected_at FROM scan_log ORDER BY detected_at DESC LIMIT ?3",
+            "SELECT id,volume_id,entry_id,event,new_path,old_path,new_size,detected_at FROM scan_log ORDER BY detected_at DESC LIMIT ?1",
     };
     let mut stmt = conn.prepare_cached(sql)?;
     let rows: Vec<ScanLogEntry> = match (volume_id, event_filter) {

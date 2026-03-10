@@ -54,17 +54,12 @@ function GroupListItem({
     <Paper
       p="sm"
       onClick={onClick}
+      className="wc-hoverable"
+      data-active={active || undefined}
       style={{
         cursor: 'pointer',
-        backgroundColor: active ? 'var(--mantine-color-primary-9)' : 'transparent',
+        backgroundColor: active ? 'var(--mantine-color-primary-light)' : 'transparent',
         borderLeft: active ? '3px solid var(--mantine-color-primary-5)' : '3px solid transparent',
-        transition: 'all 80ms ease-out',
-      }}
-      onMouseEnter={(e: React.MouseEvent<HTMLDivElement>) => {
-        if (!active) e.currentTarget.style.backgroundColor = 'var(--mantine-color-dark-6)';
-      }}
-      onMouseLeave={(e: React.MouseEvent<HTMLDivElement>) => {
-        if (!active) e.currentTarget.style.backgroundColor = 'transparent';
       }}
     >
       <Group justify="space-between" gap="xs">
@@ -109,8 +104,8 @@ function FileCard({
       p="md"
       withBorder
       style={{
-        borderColor: kept ? 'var(--mantine-color-green-7)' : 'var(--mantine-color-dark-5)',
-        backgroundColor: kept ? 'var(--mantine-color-green-9)' : 'transparent',
+        borderColor: kept ? 'var(--mantine-color-green-7)' : 'var(--mantine-color-default-border)',
+        backgroundColor: kept ? 'var(--mantine-color-green-light)' : 'transparent',
         opacity: kept ? 1 : 0.75,
         transition: 'all 120ms ease-out',
       }}
@@ -133,7 +128,7 @@ function FileCard({
         h={80} mb="sm"
         style={{
           borderRadius: 'var(--mantine-radius-sm)',
-          backgroundColor: 'var(--mantine-color-dark-6)',
+          backgroundColor: 'var(--mantine-color-default)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}
       >
@@ -187,7 +182,7 @@ function GroupDetail({
       <Stack p="md" gap="md">
         <Text size="xs" fw={600} c="dimmed" tt="uppercase" lts={0.5}>Résumé du groupe</Text>
 
-        <Paper p="sm" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+        <Paper p="sm" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
           <Stack gap={6}>
             <Group justify="space-between">
               <Text size="xs" c="dimmed">Fichiers identiques</Text>
@@ -201,7 +196,7 @@ function GroupDetail({
               <Text size="xs" c="dimmed">Taille totale</Text>
               <Text size="xs" fw={500}>{formatBytes(group.totalBytes)}</Text>
             </Group>
-            <Divider color="var(--mantine-color-dark-5)" />
+            <Divider color="var(--mantine-color-default-border)" />
             <Group justify="space-between">
               <Text size="xs" c="dimmed">À conserver</Text>
               <Text size="xs" fw={600} c="green">{toKeep.length}</Text>
@@ -256,14 +251,19 @@ function GroupDetail({
 // Empty / Loading states
 // ============================================================================
 
-function EmptyState() {
+function EmptyState({ onNavigate }: { onNavigate?: (screen: string, ctx?: any) => void }) {
   return (
     <Box ta="center" py={80}>
       <IconCopy size={48} stroke={1} style={{ color: 'var(--mantine-color-dimmed)', marginBottom: 16 }} />
       <Text size="lg" fw={600} mb="xs">Aucun doublon détecté</Text>
-      <Text size="sm" c="dimmed">
+      <Text size="sm" c="dimmed" mb="md">
         Lancez un scan avec hash activé pour détecter les fichiers en double.
       </Text>
+      {onNavigate && (
+        <Button variant="light" leftSection={<IconRefresh size={16} />} onClick={() => onNavigate('scan')}>
+          Lancer un scan
+        </Button>
+      )}
     </Box>
   );
 }
@@ -272,7 +272,7 @@ function EmptyState() {
 // Doublons Screen
 // ============================================================================
 
-export default function DoublonsScreen() {
+export default function DoublonsScreen({ onNavigate }: { onNavigate?: (screen: string, ctx?: any) => void }) {
   const [groups, setGroups] = useState<DuplicateGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeGroupIdx, setActiveGroupIdx] = useState(0);
@@ -280,31 +280,33 @@ export default function DoublonsScreen() {
   const [minSize, setMinSize] = useState<number>(0);
   const [applying, setApplying] = useState(false);
 
-  // Load duplicate groups
+  // Load duplicate groups — parallel batches of 10 for fast loading
   const loadDuplicates = useCallback(async () => {
     try {
       setLoading(true);
       const raw = await duplicateApi.find(minSize);
 
-      // Load entries for each group
+      // Load entries in parallel batches of 10
+      const BATCH = 10;
       const loaded: DuplicateGroup[] = [];
-      for (const [hash, count, totalBytes] of raw) {
-        const entries = await duplicateApi.getGroup(hash);
-        if (entries.length < 2) continue;
-
-        // Auto-keep the most recent by default
-        const sorted = [...entries].sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
-        const kept = new Set<number>([sorted[0].id]);
-
-        loaded.push({
-          hash,
-          count: entries.length,
-          totalBytes,
-          reclaimable: totalBytes - (entries[0]?.size_bytes ?? 0),
-          entries,
-          kept,
-          resolved: false,
-        });
+      for (let i = 0; i < raw.length; i += BATCH) {
+        const chunk = raw.slice(i, i + BATCH);
+        const results = await Promise.all(
+          chunk.map(async ([hash, count, totalBytes]) => {
+            const entries = await duplicateApi.getGroup(hash);
+            return { hash, count, totalBytes, entries };
+          })
+        );
+        for (const { hash, count, totalBytes, entries } of results) {
+          if (entries.length < 2) continue;
+          const sorted = [...entries].sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
+          const kept = new Set<number>([sorted[0].id]);
+          loaded.push({
+            hash, count: entries.length, totalBytes,
+            reclaimable: totalBytes - (entries[0]?.size_bytes ?? 0),
+            entries, kept, resolved: false,
+          });
+        }
       }
 
       setGroups(loaded);
@@ -333,8 +335,10 @@ export default function DoublonsScreen() {
 
   // Toggle keep/delete for an entry
   const toggleKept = useCallback((entryId: number) => {
+    if (!activeGroup) return;
+    const hash = activeGroup.hash;
     setGroups((prev) => prev.map((g) => {
-      if (g !== activeGroup) return g;
+      if (g.hash !== hash) return g;
       const newKept = new Set(g.kept);
       if (newKept.has(entryId)) {
         // Don't allow un-keeping the last one
@@ -350,8 +354,9 @@ export default function DoublonsScreen() {
   // Auto-select: keep most recent
   const autoSelect = useCallback(() => {
     if (!activeGroup) return;
+    const hash = activeGroup.hash;
     setGroups((prev) => prev.map((g) => {
-      if (g !== activeGroup) return g;
+      if (g.hash !== hash) return g;
       const sorted = [...g.entries].sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
       return { ...g, kept: new Set([sorted[0].id]) };
     }));
@@ -360,15 +365,18 @@ export default function DoublonsScreen() {
   // Apply: send to trash
   const applyDeletion = useCallback(async () => {
     if (!activeGroup) return;
+    const toDelete = activeGroup.entries.filter((e) => !activeGroup.kept.has(e.id));
+    if (toDelete.length === 0) return;
+    if (!window.confirm(`Envoyer ${toDelete.length} fichier${toDelete.length > 1 ? 's' : ''} à la corbeille ?`)) return;
     setApplying(true);
     try {
-      const toDelete = activeGroup.entries.filter((e) => !activeGroup.kept.has(e.id));
       for (const entry of toDelete) {
         await trashApi.trash(entry.id, 'duplicate');
       }
       // Mark as resolved
+      const hash = activeGroup.hash;
       setGroups((prev) => prev.map((g) =>
-        g === activeGroup ? { ...g, resolved: true } : g
+        g.hash === hash ? { ...g, resolved: true } : g
       ));
       // Move to next unresolved group
       const nextIdx = sortedGroups.findIndex((g, i) => i > activeGroupIdx && !g.resolved);
@@ -407,7 +415,7 @@ export default function DoublonsScreen() {
             Actualiser
           </Button>
         </Group>
-        <EmptyState />
+        <EmptyState onNavigate={onNavigate} />
       </Box>
     );
   }
@@ -415,7 +423,7 @@ export default function DoublonsScreen() {
   return (
     <Box h="100%" style={{ display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
-      <Box px="lg" py="sm" style={{ borderBottom: '1px solid var(--mantine-color-dark-5)', flexShrink: 0 }}>
+      <Box px="lg" py="sm" style={{ borderBottom: '1px solid var(--mantine-color-default-border)', flexShrink: 0 }}>
         <Group justify="space-between">
           <Group gap="md">
             <Text size="lg" fw={700}>Doublons</Text>
@@ -449,7 +457,7 @@ export default function DoublonsScreen() {
       {/* 3-column layout */}
       <Box style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         {/* Left: group list */}
-        <ScrollArea w={300} style={{ borderRight: '1px solid var(--mantine-color-dark-5)', flexShrink: 0 }} type="auto">
+        <ScrollArea w={300} style={{ borderRight: '1px solid var(--mantine-color-default-border)', flexShrink: 0 }} type="auto">
           <Stack gap={0} p="xs">
             {sortedGroups.map((group, idx) => (
               <GroupListItem
@@ -490,7 +498,7 @@ export default function DoublonsScreen() {
 
         {/* Right: detail panel */}
         {activeGroup && (
-          <Box w={280} style={{ borderLeft: '1px solid var(--mantine-color-dark-5)', flexShrink: 0, backgroundColor: 'var(--mantine-color-dark-7)' }}>
+          <Box w={280} style={{ borderLeft: '1px solid var(--mantine-color-default-border)', flexShrink: 0, backgroundColor: 'var(--mantine-color-body)' }}>
             <GroupDetail
               group={activeGroup}
               onAutoSelect={autoSelect}

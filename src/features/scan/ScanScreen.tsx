@@ -50,8 +50,8 @@ function VolumeSelectCard({
       onClick={onClick}
       style={{
         cursor: 'pointer',
-        borderColor: selected ? 'var(--mantine-color-primary-6)' : 'var(--mantine-color-dark-5)',
-        backgroundColor: selected ? 'var(--mantine-color-primary-9)' : 'transparent',
+        borderColor: selected ? 'var(--mantine-color-primary-6)' : 'var(--mantine-color-default-border)',
+        backgroundColor: selected ? 'var(--mantine-color-primary-light)' : 'transparent',
         transition: 'all 120ms ease-out',
       }}
     >
@@ -104,30 +104,30 @@ function ScanProgressView({
         </Alert>
 
         <SimpleGrid cols={3}>
-          <Paper p="sm" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+          <Paper p="sm" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
             <Text size="xs" c="dimmed">Fichiers</Text>
             <Text size="lg" fw={700}>{stats.files_total.toLocaleString()}</Text>
           </Paper>
-          <Paper p="sm" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+          <Paper p="sm" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
             <Text size="xs" c="dimmed">Dossiers</Text>
             <Text size="lg" fw={700}>{stats.dirs_total.toLocaleString()}</Text>
           </Paper>
-          <Paper p="sm" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+          <Paper p="sm" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
             <Text size="xs" c="dimmed">Taille totale</Text>
             <Text size="lg" fw={700}>{formatBytes(stats.bytes_total)}</Text>
           </Paper>
         </SimpleGrid>
 
         <SimpleGrid cols={3}>
-          <Paper p="sm" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+          <Paper p="sm" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
             <Text size="xs" c="dimmed">Ajoutés</Text>
             <Text size="md" fw={600} c="green">+{stats.files_added.toLocaleString()}</Text>
           </Paper>
-          <Paper p="sm" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+          <Paper p="sm" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
             <Text size="xs" c="dimmed">Modifiés</Text>
             <Text size="md" fw={600} c="yellow">~{stats.files_modified.toLocaleString()}</Text>
           </Paper>
-          <Paper p="sm" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+          <Paper p="sm" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
             <Text size="xs" c="dimmed">Supprimés</Text>
             <Text size="md" fw={600} c="red">-{stats.files_deleted.toLocaleString()}</Text>
           </Paper>
@@ -150,7 +150,7 @@ function ScanProgressView({
 
   return (
     <Stack gap="md">
-      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
         <Text size="sm" fw={600} mb="sm">
           {phaseLabels[progress.phase] ?? progress.phase}
         </Text>
@@ -249,14 +249,18 @@ export default function ScanScreen({
     unlistenRef.current = unlisten;
 
     try {
-      const result = await scanApi.start(selectedVolumeId, scanMode);
+      const result = await scanApi.start(selectedVolumeId, scanMode, {
+        maxDepth,
+        computeHash,
+        generateThumbs,
+      });
       setScanState('completed');
       setStats(result);
     } catch (err) {
       setScanState('error');
       setErrors((prev) => [...prev, `Scan failed: ${err}`]);
     }
-  }, [selectedVolumeId, scanMode]);
+  }, [selectedVolumeId, scanMode, maxDepth, computeHash, generateThumbs]);
 
   return (
     <Box p="lg" maw={800}>
@@ -273,7 +277,7 @@ export default function ScanScreen({
                 {[1, 2].map((i) => <Skeleton key={i} height={60} />)}
               </Stack>
             ) : volumes.length === 0 ? (
-              <Paper p="lg" withBorder ta="center" style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+              <Paper p="lg" withBorder ta="center" style={{ borderColor: 'var(--mantine-color-default-border)' }}>
                 <Text size="sm" c="dimmed" mb="sm">Aucun volume enregistré</Text>
                 <Button size="xs" variant="light">Ajouter un volume</Button>
               </Paper>
@@ -305,14 +309,14 @@ export default function ScanScreen({
         {/* Step 1: Options */}
         <Stepper.Step label="Options" description="Configurer le scan" icon={<IconSettings size={18} />}>
           <Stack gap="md" mt="md">
-            <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+            <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
               <Text size="sm" fw={600} mb="sm">Mode de scan</Text>
               <Group gap="md">
                 <Paper
                   p="sm" withBorder style={{
                     flex: 1, cursor: 'pointer',
-                    borderColor: scanMode === 'full' ? 'var(--mantine-color-primary-6)' : 'var(--mantine-color-dark-5)',
-                    backgroundColor: scanMode === 'full' ? 'var(--mantine-color-primary-9)' : 'transparent',
+                    borderColor: scanMode === 'full' ? 'var(--mantine-color-primary-6)' : 'var(--mantine-color-default-border)',
+                    backgroundColor: scanMode === 'full' ? 'var(--mantine-color-primary-light)' : 'transparent',
                   }}
                   onClick={() => setScanMode('full')}
                 >
@@ -322,8 +326,8 @@ export default function ScanScreen({
                 <Paper
                   p="sm" withBorder style={{
                     flex: 1, cursor: 'pointer',
-                    borderColor: scanMode === 'quick' ? 'var(--mantine-color-primary-6)' : 'var(--mantine-color-dark-5)',
-                    backgroundColor: scanMode === 'quick' ? 'var(--mantine-color-primary-9)' : 'transparent',
+                    borderColor: scanMode === 'quick' ? 'var(--mantine-color-primary-6)' : 'var(--mantine-color-default-border)',
+                    backgroundColor: scanMode === 'quick' ? 'var(--mantine-color-primary-light)' : 'transparent',
                   }}
                   onClick={() => setScanMode('quick')}
                 >
@@ -333,7 +337,7 @@ export default function ScanScreen({
               </Group>
             </Paper>
 
-            <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+            <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
               <Text size="sm" fw={600} mb="sm">Options</Text>
               <Stack gap="sm">
                 <NumberInput
@@ -371,7 +375,7 @@ export default function ScanScreen({
         {/* Step 2: Launch */}
         <Stepper.Step label="Lancement" description="Récapitulatif" icon={<IconPlayerPlay size={18} />}>
           <Stack gap="md" mt="md">
-            <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+            <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
               <Text size="sm" fw={600} mb="sm">Récapitulatif</Text>
               <Stack gap={6}>
                 <Group justify="space-between">
@@ -439,7 +443,7 @@ export default function ScanScreen({
             )}
 
             {errors.length > 0 && scanState !== 'error' && (
-              <Paper p="sm" withBorder mt="md" style={{ borderColor: 'var(--mantine-color-dark-5)', maxHeight: 200, overflow: 'auto' }}>
+              <Paper p="sm" withBorder mt="md" style={{ borderColor: 'var(--mantine-color-default-border)', maxHeight: 200, overflow: 'auto' }}>
                 <Text size="xs" fw={600} c="dimmed" mb="xs">Erreurs ({errors.length})</Text>
                 {errors.slice(-20).map((err, i) => (
                   <Text key={i} size="xs" c="yellow" mb={2} lineClamp={1}>{err}</Text>

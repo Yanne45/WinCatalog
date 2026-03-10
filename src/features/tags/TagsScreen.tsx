@@ -59,23 +59,31 @@ function TagsTab() {
 
   const handleCreate = useCallback(async () => {
     if (!newName.trim()) return;
-    await tagApi.create(newName.trim(), newColor || undefined);
-    setNewName(''); loadTags();
+    try {
+      await tagApi.create(newName.trim(), newColor || undefined);
+      setNewName(''); loadTags();
+    } catch (e) { console.error('Failed to create tag:', e); }
   }, [newName, newColor, loadTags]);
 
   const handleUpdate = useCallback(async (id: number) => {
-    await invoke('update_tag', { id, name: editName, color: editColor || null });
-    setEditingId(null); loadTags();
+    try {
+      await invoke('update_tag', { id, name: editName, color: editColor || null });
+      setEditingId(null); loadTags();
+    } catch (e) { console.error('Failed to update tag:', e); }
   }, [editName, editColor, loadTags]);
 
   const handleDelete = useCallback(async (id: number) => {
-    await invoke('delete_tag', { id }); loadTags();
-  }, [loadTags]);
+    const tag = tags.find((t) => t.id === id);
+    if (!window.confirm(`Supprimer le tag « ${tag?.name ?? id} » ? Cette action est irréversible.`)) return;
+    try {
+      await invoke('delete_tag', { id }); loadTags();
+    } catch (e) { console.error('Failed to delete tag:', e); }
+  }, [tags, loadTags]);
 
   return (
     <Stack gap="md">
       {/* Create new tag */}
-      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
         <Text size="sm" fw={600} mb="sm">Nouveau tag</Text>
         <Group gap="sm">
           <TextInput size="xs" placeholder="Nom du tag" value={newName} onChange={(e) => setNewName(e.currentTarget.value)} style={{ flex: 1 }} />
@@ -85,7 +93,7 @@ function TagsTab() {
       </Paper>
 
       {/* Tag list */}
-      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
         <Text size="sm" fw={600} mb="sm">Tags ({tags.length})</Text>
         {tags.length === 0 ? (
           <Text size="sm" c="dimmed">Aucun tag créé</Text>
@@ -93,7 +101,7 @@ function TagsTab() {
           <Stack gap={4}>
             {tags.map((tag) => (
               <Group key={tag.id} justify="space-between" py={4} px="xs"
-                style={{ borderRadius: 'var(--mantine-radius-xs)', backgroundColor: 'var(--mantine-color-dark-6)' }}>
+                style={{ borderRadius: 'var(--mantine-radius-xs)', backgroundColor: 'var(--mantine-color-default)' }}>
                 {editingId === tag.id ? (
                   <Group gap="sm" style={{ flex: 1 }}>
                     <TextInput size="xs" value={editName} onChange={(e) => setEditName(e.currentTarget.value)} style={{ flex: 1 }} />
@@ -144,20 +152,26 @@ function CollectionsTab() {
 
   const handleCreate = useCallback(async () => {
     if (!newName.trim()) return;
-    await invoke('create_collection', {
-      name: newName.trim(), description: null, icon: null, color: null,
-      isSmart: newSmart, smartQuery: null,
-    });
-    setNewName(''); setNewSmart(false); load();
+    try {
+      await invoke('create_collection', {
+        name: newName.trim(), description: null, icon: null, color: null,
+        isSmart: newSmart, smartQuery: null,
+      });
+      setNewName(''); setNewSmart(false); load();
+    } catch (e) { console.error('Failed to create collection:', e); }
   }, [newName, newSmart, load]);
 
   const handleDelete = useCallback(async (id: number) => {
-    await invoke('delete_collection', { id }); load();
-  }, [load]);
+    const col = collections.find((c) => c.id === id);
+    if (!window.confirm(`Supprimer la collection « ${col?.name ?? id} » ? Cette action est irréversible.`)) return;
+    try {
+      await invoke('delete_collection', { id }); load();
+    } catch (e) { console.error('Failed to delete collection:', e); }
+  }, [collections, load]);
 
   return (
     <Stack gap="md">
-      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
         <Text size="sm" fw={600} mb="sm">Nouvelle collection</Text>
         <Group gap="sm">
           <TextInput size="xs" placeholder="Nom" value={newName} onChange={(e) => setNewName(e.currentTarget.value)} style={{ flex: 1 }} />
@@ -166,7 +180,7 @@ function CollectionsTab() {
         </Group>
       </Paper>
 
-      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
         <Text size="sm" fw={600} mb="sm">Collections ({collections.length})</Text>
         {collections.length === 0 ? (
           <Text size="sm" c="dimmed">Aucune collection</Text>
@@ -174,7 +188,7 @@ function CollectionsTab() {
           <Stack gap={4}>
             {collections.map((col) => (
               <Group key={col.id} justify="space-between" py={4} px="xs"
-                style={{ borderRadius: 'var(--mantine-radius-xs)', backgroundColor: 'var(--mantine-color-dark-6)' }}>
+                style={{ borderRadius: 'var(--mantine-radius-xs)', backgroundColor: 'var(--mantine-color-default)' }}>
                 <Group gap="sm">
                   <IconFolder size={16} style={{ color: col.color ?? 'var(--mantine-color-dimmed)' }} />
                   <Text size="sm">{col.name}</Text>
@@ -210,7 +224,9 @@ function RulesTab() {
 
   const save = useCallback(async (updated: AutoRule[]) => {
     setRules(updated);
-    await invoke('save_rules', { ruleList: updated });
+    try {
+      await invoke('save_rules', { ruleList: updated });
+    } catch (e) { console.error('Failed to save rules:', e); }
   }, []);
 
   const toggleEnabled = useCallback((id: string) => {
@@ -218,6 +234,8 @@ function RulesTab() {
   }, [rules, save]);
 
   const deleteRule = useCallback((id: string) => {
+    const rule = rules.find((r) => r.id === id);
+    if (!window.confirm(`Supprimer la règle « ${rule?.name ?? id} » ?`)) return;
     save(rules.filter((r) => r.id !== id));
   }, [rules, save]);
 
@@ -257,7 +275,7 @@ function RulesTab() {
       </Group>
 
       {rules.length === 0 ? (
-        <Paper p="lg" withBorder ta="center" style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+        <Paper p="lg" withBorder ta="center" style={{ borderColor: 'var(--mantine-color-default-border)' }}>
           <IconBolt size={32} stroke={1} style={{ color: 'var(--mantine-color-dimmed)', marginBottom: 8 }} />
           <Text size="sm" c="dimmed">Aucune règle. Les règles s'appliquent automatiquement après chaque scan.</Text>
         </Paper>
@@ -265,7 +283,7 @@ function RulesTab() {
         <Stack gap="sm">
           {rules.map((rule) => (
             <Paper key={rule.id} p="sm" withBorder style={{
-              borderColor: 'var(--mantine-color-dark-5)',
+              borderColor: 'var(--mantine-color-default-border)',
               opacity: rule.enabled ? 1 : 0.5,
             }}>
               <Group justify="space-between" mb="xs">

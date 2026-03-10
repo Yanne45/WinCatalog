@@ -12,14 +12,13 @@
 // ============================================================================
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossbeam_channel::{bounded, Receiver, Sender};
 use rusqlite::params;
 
-use crate::db::{Database, DbError, DbResult};
+use crate::db::{Database, DbResult};
 
 // ============================================================================
 // Events
@@ -47,9 +46,9 @@ struct VolumeInfo {
     id: i64,
     label: String,
     root_path: String,
-    fs_uuid: Option<String>,
+    _fs_uuid: Option<String>,
     is_online: bool,
-    auto_detect: bool,
+    _auto_detect: bool,
 }
 
 // ============================================================================
@@ -208,9 +207,9 @@ fn load_volumes(db: &Database) -> DbResult<Vec<VolumeInfo>> {
                 id: r.get(0)?,
                 label: r.get(1)?,
                 root_path: r.get(2)?,
-                fs_uuid: r.get(3)?,
+                _fs_uuid: r.get(3)?,
                 is_online: r.get::<_, i32>(4)? != 0,
-                auto_detect: r.get::<_, i32>(5)? != 0,
+                _auto_detect: r.get::<_, i32>(5)? != 0,
             })
         })?.filter_map(|r| r.ok()).collect();
         Ok(rows)

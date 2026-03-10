@@ -108,6 +108,8 @@ CREATE INDEX IF NOT EXISTS idx_entries_type           ON entries(volume_id, is_d
 CREATE INDEX IF NOT EXISTS idx_entries_mtime          ON entries(volume_id, mtime);
 CREATE INDEX IF NOT EXISTS idx_entries_size           ON entries(volume_id, size_bytes);
 CREATE INDEX IF NOT EXISTS idx_entries_status         ON entries(status);
+CREATE INDEX IF NOT EXISTS idx_entries_kind_stats     ON entries(status, is_dir, kind, size_bytes)
+    WHERE status='present' AND is_dir=0;  -- covering index for global kind stats
 CREATE INDEX IF NOT EXISTS idx_entries_path_lower     ON entries(volume_id, path_lower);
 
 -- Index pour doublons (hash non-null uniquement)

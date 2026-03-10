@@ -46,7 +46,7 @@ function JobRow({ job }: { job: Job }) {
   const pct = Math.round(job.progress * 100);
 
   return (
-    <Box py="xs" px="sm" style={{ borderRadius: 'var(--mantine-radius-xs)', backgroundColor: 'var(--mantine-color-dark-6)' }}>
+    <Box py="xs" px="sm" style={{ borderRadius: 'var(--mantine-radius-xs)', backgroundColor: 'var(--mantine-color-default)' }}>
       <Group justify="space-between" mb={job.status === 'running' ? 6 : 0}>
         <Group gap="sm">
           <Text size="md">{meta.icon}</Text>
@@ -116,7 +116,7 @@ export default function ActivityDrawer({ opened, onClose }: ActivityDrawerProps)
 
   return (
     <Drawer opened={opened} onClose={onClose} title="Activité" position="right" size="md"
-      styles={{ content: { backgroundColor: 'var(--mantine-color-dark-7)' }, header: { backgroundColor: 'var(--mantine-color-dark-7)' } }}>
+      styles={{ content: { backgroundColor: 'var(--mantine-color-body)' }, header: { backgroundColor: 'var(--mantine-color-body)' } }}>
       <Stack gap="md">
         {/* Summary */}
         <Group gap="md">
@@ -144,7 +144,7 @@ export default function ActivityDrawer({ opened, onClose }: ActivityDrawerProps)
             { value: 'queued', label: `File (${queued.length})` },
             { value: 'error', label: `Erreurs (${errors.length})` },
           ]}
-          styles={{ root: { backgroundColor: 'var(--mantine-color-dark-6)' } }}
+          styles={{ root: { backgroundColor: 'var(--mantine-color-default)' } }}
         />
 
         {/* Errors section */}
@@ -154,7 +154,7 @@ export default function ActivityDrawer({ opened, onClose }: ActivityDrawerProps)
           </Alert>
         )}
 
-        <Divider color="var(--mantine-color-dark-5)" />
+        <Divider color="var(--mantine-color-default-border)" />
 
         {/* Job list */}
         <ScrollArea.Autosize mah={500} type="auto">

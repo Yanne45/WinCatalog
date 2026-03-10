@@ -5,14 +5,14 @@
 
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::params;
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::db::{Database, DbError, DbResult};
+use crate::db::{Database, DbError};
 
 #[derive(Error, Debug)]
 pub enum ExportError {
@@ -85,12 +85,14 @@ pub fn export_sqlite(db: &Database, output_path: &Path, scope: &ExportScope) -> 
     // For scoped: copy DB then delete unrelated data
     match scope {
         ExportScope::Full => {
-            // Direct file copy of the DB (after WAL checkpoint)
-            db.write(|conn| {
+            // Checkpoint + copy inside write lock to prevent race condition
+            let src = db.path().to_path_buf();
+            let dst = output_path.to_path_buf();
+            db.write(move |conn| {
                 conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+                std::fs::copy(&src, &dst).map_err(|e| DbError::Execution(format!("Copy failed: {}", e)))?;
                 Ok(())
             })?;
-            fs::copy(db.path(), output_path)?;
         }
         ExportScope::Volume { id } => {
             // Copy full DB, then delete entries from other volumes

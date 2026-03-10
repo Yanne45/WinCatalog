@@ -3,13 +3,13 @@
 // Batch rename: pattern tokens, preview, apply + journalize in scan_log
 // ============================================================================
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::params;
 use thiserror::Error;
 
-use crate::db::{Database, DbError, DbResult};
+use crate::db::{Database, DbError};
 
 #[derive(Error, Debug)]
 pub enum RenameError {
@@ -236,26 +236,34 @@ pub fn apply_rename(
                 // Update DB
                 let eid = p.entry_id;
                 let new_name = p.new_name.clone();
-                let new_path = p.new_path.clone();
+                let new_path_str = p.new_path.clone();
                 let new_parent = new.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
                 let new_ext = new.extension().map(|e| e.to_string_lossy().to_lowercase());
                 let old_path = p.old_path.clone();
 
-                db.write(move |conn| {
+                let db_result = db.write(move |conn| {
                     conn.execute(
                         "UPDATE entries SET name=?1, path=?2, parent_path=?3, ext=?4 WHERE id=?5",
-                        params![new_name, new_path, new_parent, new_ext, eid],
+                        params![new_name, new_path_str, new_parent, new_ext, eid],
                     )?;
                     // Journal in scan_log
                     conn.execute(
                         "INSERT INTO scan_log (volume_id, scan_id, entry_id, event, old_path, new_path, detected_at)
                          VALUES (?1, 0, ?2, 'renamed', ?3, ?4, ?5)",
-                        params![volume_id, eid, old_path, new_path, now],
+                        params![volume_id, eid, old_path, new_path_str, now],
                     )?;
                     Ok(())
-                }).map_err(RenameError::Db)?;
+                });
 
-                stats.renamed += 1;
+                match db_result {
+                    Ok(()) => { stats.renamed += 1; }
+                    Err(e) => {
+                        // Roll back disk rename to keep consistency
+                        log::error!("DB update failed after rename, rolling back: {}", e);
+                        let _ = std::fs::rename(new, old);
+                        stats.errors += 1;
+                    }
+                }
             }
             Err(e) => {
                 log::warn!("Rename failed {} → {}: {}", p.old_path, p.new_path, e);

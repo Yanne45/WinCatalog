@@ -24,7 +24,7 @@ use rusqlite::params;
 
 use crate::core::hasher;
 use crate::core::thumbs;
-use crate::db::{Database, DbError, DbResult};
+use crate::db::{Database, DbResult};
 
 // ============================================================================
 // Events (sent to frontend via Tauri)
@@ -300,10 +300,10 @@ struct JobRecord {
     variant: Option<String>,
     entry_id: Option<i64>,
     volume_id: Option<i64>,
-    priority: i64,
+    _priority: i64,
     attempts: i64,
     max_attempts: i64,
-    payload: Option<String>,
+    _payload: Option<String>,
 }
 
 fn dequeue_next_job(db: &Database) -> DbResult<Option<JobRecord>> {
@@ -327,10 +327,10 @@ fn dequeue_next_job(db: &Database) -> DbResult<Option<JobRecord>> {
                     variant: row.get(2)?,
                     entry_id: row.get(3)?,
                     volume_id: row.get(4)?,
-                    priority: row.get(5)?,
+                    _priority: row.get(5)?,
                     attempts: row.get(6)?,
                     max_attempts: row.get(7)?,
-                    payload: row.get(8)?,
+                    _payload: row.get(8)?,
                 })
             })
             .optional()?;
@@ -404,30 +404,31 @@ fn execute_hash_job(
     db: &Database,
     job: &JobRecord,
     cancel: &Arc<AtomicBool>,
-    emit: &(dyn Fn(JobEvent) + Sync),
+    _emit: &(dyn Fn(JobEvent) + Sync),
 ) -> Result<(), JobExecError> {
     let volume_id = job.volume_id.ok_or_else(|| {
         JobExecError::Failed("Hash job missing volume_id".into())
     })?;
 
     let mode = job.variant.as_deref().unwrap_or("full");
-    let job_id = job.id;
+    let _job_id = job.id;
 
     // Create a cancel receiver that bridges the AtomicBool.
-    // The watcher thread will terminate when cancel_tx is sent or dropped.
+    // Use a separate stop flag so we don't corrupt the shared cancel_current.
     let (cancel_tx, cancel_rx) = bounded(1);
     let cancel_flag = cancel.clone();
+    let stop_watcher = Arc::new(AtomicBool::new(false));
+    let stop_flag = stop_watcher.clone();
     let cancel_handle = thread::spawn(move || {
         loop {
             if cancel_flag.load(Ordering::Relaxed) {
                 let _ = cancel_tx.send(());
                 return;
             }
-            thread::sleep(Duration::from_millis(100));
-            // Also stop if the receiver is dropped (hash finished)
-            if cancel_tx.is_full() || cancel_tx.len() > 0 {
+            if stop_flag.load(Ordering::Relaxed) {
                 return;
             }
+            thread::sleep(Duration::from_millis(100));
         }
     });
 
@@ -440,8 +441,8 @@ fn execute_hash_job(
         None,
     );
 
-    // Signal the cancel watcher to stop (drop won't help since it moved into the thread)
-    cancel.store(true, Ordering::Relaxed);
+    // Signal the watcher thread to stop (without corrupting the shared cancel flag)
+    stop_watcher.store(true, Ordering::Relaxed);
     let _ = cancel_handle.join();
 
     match result {
@@ -616,20 +617,6 @@ fn ts() -> i64 {
         .as_secs() as i64
 }
 
-fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-    if bytes >= GB {
-        format!("{:.1} Go", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} Mo", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.0} Ko", bytes as f64 / KB as f64)
-    } else {
-        format!("{} o", bytes)
-    }
-}
 
 // rusqlite OptionalExtension
 use rusqlite::OptionalExtension;

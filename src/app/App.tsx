@@ -3,7 +3,7 @@
 // AppShell + layout + real screens
 // ============================================================================
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import {
   AppShell, Group, Text, ActionIcon, TextInput, Tooltip, Badge,
   UnstyledButton, Stack, Divider, Box, Kbd,
@@ -68,7 +68,7 @@ function Sidebar({ active, onNavigate, collapsed }: {
           const items = NAV_ITEMS.filter((n) => n.section === section);
           return (
             <Box key={section}>
-              {si > 0 && <Divider my={8} color="var(--mantine-color-dark-5)" />}
+              {si > 0 && <Divider my={8} color="var(--mantine-color-default-border)" />}
               {!collapsed && (
                 <Text size="xs" fw={600} c="dimmed" tt="uppercase" lts={0.5} mb={4} px="sm">
                   {section}
@@ -84,19 +84,14 @@ function Sidebar({ active, onNavigate, collapsed }: {
                       py={8}
                       px={collapsed ? 0 : 'sm'}
                       w="100%"
+                      className="wc-nav-item"
+                      data-active={isActive || undefined}
                       style={{
                         display: 'flex', alignItems: 'center',
                         justifyContent: collapsed ? 'center' : 'flex-start',
                         gap: 10, borderRadius: 'var(--mantine-radius-sm)',
-                        backgroundColor: isActive ? 'var(--mantine-color-primary-9)' : 'transparent',
-                        color: isActive ? 'var(--mantine-color-primary-4)' : 'var(--mantine-color-dark-1)',
-                        transition: 'background-color 120ms ease-out',
-                      }}
-                      onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
-                        if (!isActive) e.currentTarget.style.backgroundColor = 'var(--mantine-color-dark-6)';
-                      }}
-                      onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
-                        if (!isActive) e.currentTarget.style.backgroundColor = 'transparent';
+                        backgroundColor: isActive ? 'var(--mantine-color-primary-light)' : 'transparent',
+                        color: isActive ? 'var(--mantine-color-primary-light-color)' : 'var(--mantine-color-text)',
                       }}
                     >
                       <Icon size={20} stroke={1.5} />
@@ -137,7 +132,7 @@ function Topbar({ onToggleSidebar, sidebarCollapsed, onOpenSearch }: {
         w={420} size="sm" radius="sm" variant="filled" readOnly
         onClick={onOpenSearch}
         style={{ cursor: 'pointer' }}
-        styles={{ input: { backgroundColor: 'var(--mantine-color-dark-6)', borderColor: 'var(--mantine-color-dark-5)' } }}
+        styles={{ input: { backgroundColor: 'var(--mantine-color-default)', borderColor: 'var(--mantine-color-default-border)' } }}
       />
 
       <Group gap="sm">
@@ -180,36 +175,23 @@ export default function App() {
   // Ctrl+K
   useHotkeys([['mod+K', () => setCommandPaletteOpen(true)]]);
 
-  const renderScreen = () => {
-    switch (activeScreen) {
-      case 'dashboard':
-        return <DashboardScreen onNavigate={handleNavigate} />;
-      case 'explorer':
-        return (
-          <ExplorerScreen
-            initialVolumeId={navContext.volumeId}
-            initialPath={navContext.path}
-            onNavigateApp={handleNavigate}
-          />
-        );
-      case 'scan':
-        return (
-          <ScanScreen
-            initialVolumeId={navContext.volumeId}
-            initialMode={navContext.mode}
-            onNavigate={handleNavigate}
-          />
-        );
-      case 'doublons':
-        return <DoublonsScreen />;
-      case 'tags':
-        return <TagsScreen />;
-      case 'settings':
-        return <SettingsScreen />;
-      default:
-        return <DashboardScreen onNavigate={handleNavigate} />;
+  // Track which screens have been visited (lazy mount, but no unmount)
+  const [visitedScreens, setVisitedScreens] = useState<Set<Screen>>(new Set(['dashboard']));
+
+  // When activeScreen changes, add it to visited set
+  const visited = useMemo(() => {
+    if (!visitedScreens.has(activeScreen)) {
+      const next = new Set(visitedScreens);
+      next.add(activeScreen);
+      setVisitedScreens(next);
+      return next;
     }
-  };
+    return visitedScreens;
+  }, [activeScreen, visitedScreens]);
+
+  const screenStyle = (screen: Screen): React.CSSProperties => ({
+    display: activeScreen === screen ? 'contents' : 'none',
+  });
 
   return (
     <>
@@ -219,10 +201,10 @@ export default function App() {
         footer={{ height: 28 }}
         padding={0}
         styles={{
-          main: { backgroundColor: 'var(--mantine-color-dark-8)', minHeight: '100vh' },
-          header: { backgroundColor: 'var(--mantine-color-dark-7)', borderBottom: '1px solid var(--mantine-color-dark-5)' },
-          navbar: { backgroundColor: 'var(--mantine-color-dark-7)', borderRight: '1px solid var(--mantine-color-dark-5)', transition: 'width 180ms ease-out' },
-          footer: { backgroundColor: 'var(--mantine-color-dark-7)', borderTop: '1px solid var(--mantine-color-dark-5)' },
+          main: { backgroundColor: 'var(--mantine-color-body)', minHeight: '100vh' },
+          header: { backgroundColor: 'var(--mantine-color-body)', borderBottom: '1px solid var(--mantine-color-default-border)' },
+          navbar: { backgroundColor: 'var(--mantine-color-body)', borderRight: '1px solid var(--mantine-color-default-border)', transition: 'width 180ms ease-out' },
+          footer: { backgroundColor: 'var(--mantine-color-body)', borderTop: '1px solid var(--mantine-color-default-border)' },
         }}
       >
         <AppShell.Header>
@@ -237,7 +219,39 @@ export default function App() {
           <Sidebar active={activeScreen} onNavigate={handleSidebarNavigate} collapsed={sidebarCollapsed} />
         </AppShell.Navbar>
 
-        <AppShell.Main>{renderScreen()}</AppShell.Main>
+        <AppShell.Main>
+          {/* Persistent screens: mounted once, hidden via CSS to preserve state */}
+          <div style={screenStyle('dashboard')}>
+            {visited.has('dashboard') && <DashboardScreen onNavigate={handleNavigate} />}
+          </div>
+          <div style={screenStyle('explorer')}>
+            {visited.has('explorer') && (
+              <ExplorerScreen
+                initialVolumeId={navContext.volumeId}
+                initialPath={navContext.path}
+                onNavigateApp={handleNavigate}
+              />
+            )}
+          </div>
+          <div style={screenStyle('scan')}>
+            {visited.has('scan') && (
+              <ScanScreen
+                initialVolumeId={navContext.volumeId}
+                initialMode={navContext.mode}
+                onNavigate={handleNavigate}
+              />
+            )}
+          </div>
+          <div style={screenStyle('doublons')}>
+            {visited.has('doublons') && <DoublonsScreen onNavigate={handleNavigate} />}
+          </div>
+          <div style={screenStyle('tags')}>
+            {visited.has('tags') && <TagsScreen />}
+          </div>
+          <div style={screenStyle('settings')}>
+            {visited.has('settings') && <SettingsScreen />}
+          </div>
+        </AppShell.Main>
 
         <AppShell.Footer>
           <StatusBar />

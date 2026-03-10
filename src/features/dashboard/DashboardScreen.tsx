@@ -3,7 +3,7 @@
 // Dashboard with real data from dashboardApi
 // ============================================================================
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, memo } from 'react';
 import {
   Box, Group, Stack, Text, Paper, Badge, Button, SimpleGrid,
   RingProgress, Skeleton, ActionIcon, Menu, Tooltip,
@@ -33,7 +33,7 @@ const KIND_LABELS: Record<string, string> = {
 // Volume Card
 // ============================================================================
 
-function VolumeCard({
+const VolumeCard = memo(function VolumeCard({
   volume, onScan, onExplore,
 }: {
   volume: Volume;
@@ -49,9 +49,8 @@ function VolumeCard({
   return (
     <Paper
       p="md" withBorder
-      style={{ borderColor: 'var(--mantine-color-dark-5)', cursor: 'pointer', transition: 'border-color 120ms ease-out' }}
-      onMouseEnter={(e: React.MouseEvent<HTMLDivElement>) => { e.currentTarget.style.borderColor = 'var(--mantine-color-primary-7)'; }}
-      onMouseLeave={(e: React.MouseEvent<HTMLDivElement>) => { e.currentTarget.style.borderColor = 'var(--mantine-color-dark-5)'; }}
+      className="wc-card-hover"
+      style={{ borderColor: 'var(--mantine-color-default-border)', cursor: 'pointer' }}
       onClick={() => onExplore(volume)}
     >
       <Group justify="space-between" align="flex-start" mb="sm">
@@ -101,13 +100,13 @@ function VolumeCard({
       )}
     </Paper>
   );
-}
+});
 
 // ============================================================================
 // Kind Distribution (REAL data)
 // ============================================================================
 
-function KindDistribution({ stats }: { stats: KindStat[] }) {
+const KindDistribution = memo(function KindDistribution({ stats }: { stats: KindStat[] }) {
   if (stats.length === 0) return null;
 
   const totalBytes = stats.reduce((s, k) => s + k.bytes, 0);
@@ -120,7 +119,7 @@ function KindDistribution({ stats }: { stats: KindStat[] }) {
   }));
 
   return (
-    <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+    <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
       <Text fw={600} size="sm" mb="md">Répartition par type</Text>
       <Group align="center" gap="lg">
         <ResponsiveContainer width={140} height={140}>
@@ -131,7 +130,7 @@ function KindDistribution({ stats }: { stats: KindStat[] }) {
               ))}
             </Pie>
             <ReTooltip
-              contentStyle={{ backgroundColor: 'var(--mantine-color-dark-7)', border: '1px solid var(--mantine-color-dark-5)', borderRadius: 6, fontSize: 12 }}
+              contentStyle={{ backgroundColor: 'var(--mantine-color-body)', border: '1px solid var(--mantine-color-default-border)', borderRadius: 6, fontSize: 12 }}
               formatter={(value: number, _: any, entry: any) => [`${value}% (${formatBytes(entry.payload.bytes)})`, entry.payload.name]}
             />
           </PieChart>
@@ -149,13 +148,13 @@ function KindDistribution({ stats }: { stats: KindStat[] }) {
       </Group>
     </Paper>
   );
-}
+});
 
 // ============================================================================
 // Top Folders (REAL data)
 // ============================================================================
 
-function TopFolders({ folders }: { folders: FolderStat[] }) {
+const TopFolders = memo(function TopFolders({ folders }: { folders: FolderStat[] }) {
   if (folders.length === 0) return null;
 
   const chartData = folders.slice(0, 10).map((f) => ({
@@ -165,14 +164,14 @@ function TopFolders({ folders }: { folders: FolderStat[] }) {
   }));
 
   return (
-    <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+    <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
       <Text fw={600} size="sm" mb="md">Top dossiers</Text>
       <ResponsiveContainer width="100%" height={200}>
         <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 10 }}>
           <XAxis type="number" hide />
-          <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 11, fill: '#94a3b8' }} />
+          <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 11, fill: 'var(--mantine-color-dimmed)' }} />
           <ReTooltip
-            contentStyle={{ backgroundColor: 'var(--mantine-color-dark-7)', border: '1px solid var(--mantine-color-dark-5)', borderRadius: 6, fontSize: 12 }}
+            contentStyle={{ backgroundColor: 'var(--mantine-color-body)', border: '1px solid var(--mantine-color-default-border)', borderRadius: 6, fontSize: 12 }}
             formatter={(value: number) => [formatBytes(value), 'Taille']}
           />
           <Bar dataKey="bytes" fill="var(--mantine-color-primary-6)" radius={[0, 4, 4, 0]} />
@@ -180,13 +179,13 @@ function TopFolders({ folders }: { folders: FolderStat[] }) {
       </ResponsiveContainer>
     </Paper>
   );
-}
+});
 
 // ============================================================================
 // Recent Activity (REAL data)
 // ============================================================================
 
-function RecentActivity({ entries }: { entries: ScanLogEntry[] }) {
+const RecentActivity = memo(function RecentActivity({ entries }: { entries: ScanLogEntry[] }) {
   if (entries.length === 0) return null;
 
   const eventLabels: Record<string, { label: string; color: string }> = {
@@ -198,7 +197,7 @@ function RecentActivity({ entries }: { entries: ScanLogEntry[] }) {
   };
 
   return (
-    <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+    <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
       <Text fw={600} size="sm" mb="md">Activité récente</Text>
       <Stack gap={4}>
         {entries.slice(0, 10).map((e) => {
@@ -215,30 +214,30 @@ function RecentActivity({ entries }: { entries: ScanLogEntry[] }) {
       </Stack>
     </Paper>
   );
-}
+});
 
 // ============================================================================
 // Stats Row
 // ============================================================================
 
-function StatsRow({ volumes, trashCount, trashSize }: { volumes: Volume[]; trashCount: number; trashSize: number }) {
+const StatsRow = memo(function StatsRow({ volumes, trashCount, trashSize }: { volumes: Volume[]; trashCount: number; trashSize: number }) {
   const totalUsed = volumes.reduce((s, v) => s + (v.used_bytes ?? 0), 0);
   const totalFree = volumes.reduce((s, v) => s + (v.free_bytes ?? 0), 0);
   const onlineCount = volumes.filter((v) => v.is_online).length;
 
   return (
     <SimpleGrid cols={{ base: 2, lg: 4 }}>
-      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
         <Text size="xs" c="dimmed" tt="uppercase" fw={600} lts={0.5}>Volumes</Text>
         <Text size="xl" fw={700} mt={4}>{volumes.length}</Text>
         <Text size="xs" c="dimmed">{onlineCount} en ligne</Text>
       </Paper>
-      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
         <Text size="xs" c="dimmed" tt="uppercase" fw={600} lts={0.5}>Espace utilisé</Text>
         <Text size="xl" fw={700} mt={4}>{formatBytes(totalUsed)}</Text>
         <Text size="xs" c="dimmed">{formatBytes(totalFree)} libre</Text>
       </Paper>
-      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
         <Group gap={6}>
           <IconTrash size={12} style={{ color: 'var(--mantine-color-dimmed)' }} />
           <Text size="xs" c="dimmed" tt="uppercase" fw={600} lts={0.5}>Corbeille</Text>
@@ -246,7 +245,7 @@ function StatsRow({ volumes, trashCount, trashSize }: { volumes: Volume[]; trash
         <Text size="xl" fw={700} mt={4}>{trashCount}</Text>
         <Text size="xs" c="dimmed">{formatBytes(trashSize)}</Text>
       </Paper>
-      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+      <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
         <Group gap={6}>
           <IconClock size={12} style={{ color: 'var(--mantine-color-dimmed)' }} />
           <Text size="xs" c="dimmed" tt="uppercase" fw={600} lts={0.5}>Dernier scan</Text>
@@ -260,7 +259,7 @@ function StatsRow({ volumes, trashCount, trashSize }: { volumes: Volume[]; trash
       </Paper>
     </SimpleGrid>
   );
-}
+});
 
 // ============================================================================
 // Empty State

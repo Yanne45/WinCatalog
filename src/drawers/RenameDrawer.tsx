@@ -109,7 +109,7 @@ export default function RenameDrawer({ opened, onClose, entryIds, volumeId }: Re
 
   return (
     <Drawer opened={opened} onClose={onClose} title="Renommer par lot" position="right" size="lg"
-      styles={{ content: { backgroundColor: 'var(--mantine-color-dark-7)' }, header: { backgroundColor: 'var(--mantine-color-dark-7)' } }}>
+      styles={{ content: { backgroundColor: 'var(--mantine-color-body)' }, header: { backgroundColor: 'var(--mantine-color-body)' } }}>
       <ScrollArea h="calc(100vh - 80px)" type="auto">
         <Stack gap="md">
           {/* Result */}
@@ -146,7 +146,7 @@ export default function RenameDrawer({ opened, onClose, entryIds, volumeId }: Re
             </Group>
           </div>
 
-          <Divider color="var(--mantine-color-dark-5)" />
+          <Divider color="var(--mantine-color-default-border)" />
 
           {/* Summary */}
           <Group gap="md">
@@ -164,7 +164,7 @@ export default function RenameDrawer({ opened, onClose, entryIds, volumeId }: Re
           )}
 
           {/* Preview table */}
-          <Paper withBorder style={{ borderColor: 'var(--mantine-color-dark-5)', overflow: 'hidden' }}>
+          <Paper withBorder style={{ borderColor: 'var(--mantine-color-default-border)', overflow: 'hidden' }}>
             <Table.ScrollContainer minWidth={400}>
               <Table striped={false} highlightOnHover withColumnBorders={false}>
                 <Table.Thead>
@@ -178,7 +178,7 @@ export default function RenameDrawer({ opened, onClose, entryIds, volumeId }: Re
                   {previews.slice(0, 50).map((p) => (
                     <Table.Tr key={p.entry_id} style={{
                       opacity: p.conflict ? 0.5 : 1,
-                      backgroundColor: p.conflict ? 'var(--mantine-color-red-9)' : undefined,
+                      backgroundColor: p.conflict ? 'var(--mantine-color-red-light)' : undefined,
                     }}>
                       <Table.Td><Text size="xs" lineClamp={1}>{p.old_name}</Text></Table.Td>
                       <Table.Td><Text size="xs" c="dimmed">→</Text></Table.Td>
@@ -201,7 +201,7 @@ export default function RenameDrawer({ opened, onClose, entryIds, volumeId }: Re
             </Table.ScrollContainer>
           </Paper>
 
-          <Divider color="var(--mantine-color-dark-5)" />
+          <Divider color="var(--mantine-color-default-border)" />
 
           {/* Apply */}
           <Button

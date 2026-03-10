@@ -50,7 +50,7 @@ fn kind_from_ext(ext: &str) -> Option<&'static str> {
         // Text
         "txt" | "md" | "markdown" | "rst" | "log" | "ini" | "cfg"
         | "conf" | "yaml" | "yml" | "toml" | "json" | "xml" | "html"
-        | "htm" | "css" | "js" | "ts" | "jsx" | "tsx" | "py" | "rs"
+        | "htm" | "css" | "js" | "jsx" | "tsx" | "py" | "rs"
         | "go" | "java" | "c" | "cpp" | "h" | "hpp" | "cs" | "rb"
         | "php" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat"
         | "cmd" | "sql" | "r" | "swift" | "kt" | "scala" | "lua"

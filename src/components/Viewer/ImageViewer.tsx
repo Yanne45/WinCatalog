@@ -69,7 +69,7 @@ function FilmstripThumb({
       style={{
         borderRadius: 'var(--mantine-radius-xs)',
         border: `2px solid ${active ? 'var(--mantine-color-primary-5)' : 'transparent'}`,
-        backgroundColor: 'var(--mantine-color-dark-6)',
+        backgroundColor: 'var(--mantine-color-default)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         cursor: 'pointer', flexShrink: 0, opacity: active ? 1 : 0.6,
         transition: 'all 80ms ease-out',
@@ -91,14 +91,14 @@ function InfoPanel({ entry, imagePath, opened, onClose }: {
   return (
     <Drawer opened={opened} onClose={onClose} position="right" size="sm" withCloseButton
       title={<Text size="sm" fw={600}>Informations</Text>}
-      styles={{ content: { backgroundColor: 'var(--mantine-color-dark-7)' }, header: { backgroundColor: 'var(--mantine-color-dark-7)' } }}>
+      styles={{ content: { backgroundColor: 'var(--mantine-color-body)' }, header: { backgroundColor: 'var(--mantine-color-body)' } }}>
       <Stack gap="sm">
         <Row label="Nom" value={entry.name} />
         <Row label="Taille" value={formatBytes(entry.size_bytes)} />
         <Row label="Extension" value={entry.ext ? `.${entry.ext}` : '—'} />
         <Row label="Modifié" value={formatDate(entry.mtime)} />
         {imagePath && <Row label="Chemin" value={imagePath} />}
-        <Divider color="var(--mantine-color-dark-5)" />
+        <Divider color="var(--mantine-color-default-border)" />
         <Text size="xs" c="dimmed">
           Les métadonnées EXIF détaillées (appareil, GPS, ISO…) seront affichées ici
           quand les extracteurs metadata sont exécutés.
@@ -221,7 +221,7 @@ export default function ImageViewer({
         opened={opened} onClose={onClose}
         fullScreen withCloseButton={false} padding={0}
         styles={{
-          content: { backgroundColor: '#2a2a2e' }, // neutral gray distinct from app
+          content: { backgroundColor: 'var(--mantine-color-body)' }, // neutral gray distinct from app
           body: { height: '100vh', display: 'flex', flexDirection: 'column' },
         }}
       >
@@ -243,7 +243,7 @@ export default function ImageViewer({
             <Tooltip label="Ajuster hauteur (H)"><ActionIcon variant="subtle" color="gray" size="sm" onClick={zoomFitHeight}><IconArrowAutofitHeight size={16} /></ActionIcon></Tooltip>
             <Tooltip label="100% (1)"><ActionIcon variant="subtle" color="gray" size="sm" onClick={zoom100}><IconMaximize size={16} /></ActionIcon></Tooltip>
 
-            <Divider orientation="vertical" mx={4} color="dark.4" />
+            <Divider orientation="vertical" mx={4} color="var(--mantine-color-default-border)" />
 
             <Tooltip label={diaporama ? 'Pause (Espace)' : 'Diaporama (Espace)'}>
               <ActionIcon variant="subtle" color={diaporama ? 'primary' : 'gray'} size="sm" onClick={toggleDiaporama}>
@@ -257,7 +257,7 @@ export default function ImageViewer({
               </ActionIcon>
             </Tooltip>
 
-            <Divider orientation="vertical" mx={4} color="dark.4" />
+            <Divider orientation="vertical" mx={4} color="var(--mantine-color-default-border)" />
 
             <Tooltip label="Fermer (Esc)">
               <ActionIcon variant="subtle" color="gray" size="sm" onClick={onClose}><IconX size={16} /></ActionIcon>

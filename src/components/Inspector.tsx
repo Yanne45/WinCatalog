@@ -3,7 +3,7 @@
 // Adaptive inspector panel: metadata by kind, tags, custom fields, AI section
 // ============================================================================
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Box, Group, Stack, Text, Badge, Divider, ActionIcon, Button,
   ScrollArea, TextInput, Select, Tooltip, Loader,
@@ -248,15 +248,34 @@ function AiSection({ entryId, kind, annotations }: { entryId: number; kind: File
 
 function CustomFieldsSection({ entryId, fields }: { entryId: number; fields: CustomFieldValue[] }) {
   const [values, setValues] = useState(fields);
+  const debounceRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => { setValues(fields); }, [fields]);
 
-  const handleChange = useCallback(async (fieldId: number, value: string | null) => {
+  const saveField = useCallback(async (fieldId: number, value: string | null) => {
     try {
       await invoke('set_entry_custom_value', { entryId, fieldId, value });
-      setValues((prev) => prev.map((f) => f.field_id === fieldId ? { ...f, value } : f));
     } catch {}
   }, [entryId]);
+
+  const handleChange = useCallback((fieldId: number, value: string | null) => {
+    // Update local state immediately for responsive UI
+    setValues((prev) => prev.map((f) => f.field_id === fieldId ? { ...f, value } : f));
+    // Debounce the API call
+    clearTimeout(debounceRef.current[fieldId]);
+    debounceRef.current[fieldId] = setTimeout(() => saveField(fieldId, value), 500);
+  }, [saveField]);
+
+  // Cleanup debounce timers on unmount
+  useEffect(() => {
+    return () => { Object.values(debounceRef.current).forEach(clearTimeout); };
+  }, []);
+
+  const handleBoolToggle = useCallback(async (fieldId: number, currentValue: string | null) => {
+    const newValue = currentValue === 'true' ? 'false' : 'true';
+    setValues((prev) => prev.map((f) => f.field_id === fieldId ? { ...f, value: newValue } : f));
+    await saveField(fieldId, newValue);
+  }, [saveField]);
 
   if (fields.length === 0) return null;
 
@@ -269,7 +288,7 @@ function CustomFieldsSection({ entryId, fields }: { entryId: number; fields: Cus
           {f.field_type === 'boolean' ? (
             <Badge size="xs" variant="light" color={f.value === 'true' ? 'green' : 'gray'}
               style={{ cursor: 'pointer' }}
-              onClick={() => handleChange(f.field_id, f.value === 'true' ? 'false' : 'true')}>
+              onClick={() => handleBoolToggle(f.field_id, f.value)}>
               {f.value === 'true' ? 'Oui' : 'Non'}
             </Badge>
           ) : (
@@ -382,10 +401,10 @@ export default function Inspector({ entrySlim, allTags, onClose, onTagFilter, on
         </Group>
 
         {/* Preview */}
-        <Box h={140} style={{ borderRadius: 'var(--mantine-radius-sm)', backgroundColor: 'var(--mantine-color-dark-6)',
+        <Box h={140} style={{ borderRadius: 'var(--mantine-radius-sm)', backgroundColor: 'var(--mantine-color-default)',
           display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           {entrySlim.is_dir ? <IconFolder size={48} stroke={1} style={{ color: '#facc15' }} />
-            : <Text size={48}>{info.icon}</Text>}
+            : <Text fz={48}>{info.icon}</Text>}
         </Box>
 
         {/* Name + kind */}
@@ -396,7 +415,7 @@ export default function Inspector({ entrySlim, allTags, onClose, onTagFilter, on
           </Badge>
         </div>
 
-        <Divider color="var(--mantine-color-dark-5)" />
+        <Divider color="var(--mantine-color-default-border)" />
 
         {/* Common metadata */}
         <Stack gap={6}>
@@ -406,7 +425,7 @@ export default function Inspector({ entrySlim, allTags, onClose, onTagFilter, on
           {fullEntry?.path && <Row label="Chemin" value={fullEntry.path} />}
         </Stack>
 
-        <Divider color="var(--mantine-color-dark-5)" />
+        <Divider color="var(--mantine-color-default-border)" />
 
         {/* Kind-specific metadata */}
         {entrySlim.kind === 'image' && <ImageSection meta={imageMeta} filePath={fullEntry?.path} />}
@@ -417,12 +436,12 @@ export default function Inspector({ entrySlim, allTags, onClose, onTagFilter, on
         {/* AI section (documents + images) */}
         {(entrySlim.kind === 'document' || entrySlim.kind === 'text' || entrySlim.kind === 'image') && (
           <>
-            <Divider color="var(--mantine-color-dark-5)" />
+            <Divider color="var(--mantine-color-default-border)" />
             <AiSection entryId={entrySlim.id} kind={entrySlim.kind} annotations={aiAnnotations} />
           </>
         )}
 
-        <Divider color="var(--mantine-color-dark-5)" />
+        <Divider color="var(--mantine-color-default-border)" />
 
         {/* Tags */}
         <TagsSection entryId={entrySlim.id} entryTags={entryTags} allTags={allTags}
@@ -431,7 +450,7 @@ export default function Inspector({ entrySlim, allTags, onClose, onTagFilter, on
         {/* Custom fields */}
         {customFields.length > 0 && (
           <>
-            <Divider color="var(--mantine-color-dark-5)" />
+            <Divider color="var(--mantine-color-default-border)" />
             <CustomFieldsSection entryId={entrySlim.id} fields={customFields} />
           </>
         )}

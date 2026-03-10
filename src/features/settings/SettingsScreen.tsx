@@ -63,7 +63,7 @@ function useSettingBool(key: string, defaultValue: boolean) {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }} mb="md">
+    <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }} mb="md">
       <Text size="sm" fw={600} mb="sm">{title}</Text>
       {children}
     </Paper>
@@ -202,7 +202,7 @@ function CacheTab() {
             </Group>
           </Group>
 
-          <Divider color="var(--mantine-color-dark-5)" />
+          <Divider color="var(--mantine-color-default-border)" />
 
           <Button variant="light" size="xs" color="yellow" leftSection={<IconTrash size={14} />}>
             Vider le cache
@@ -301,9 +301,9 @@ function TrashTab() {
             />
           </Group>
 
-          <Divider color="var(--mantine-color-dark-5)" />
+          <Divider color="var(--mantine-color-default-border)" />
 
-          <Paper p="sm" style={{ backgroundColor: 'var(--mantine-color-dark-6)', borderRadius: 'var(--mantine-radius-sm)' }}>
+          <Paper p="sm" style={{ backgroundColor: 'var(--mantine-color-default)', borderRadius: 'var(--mantine-radius-sm)' }}>
             <Group justify="space-between">
               <div>
                 <Text size="sm" fw={500}>{trashCount} élément{trashCount > 1 ? 's' : ''} en corbeille</Text>
@@ -524,7 +524,7 @@ function CustomFieldsTab() {
           <Stack gap={4}>
             {fields.map((f) => (
               <Group key={f.id} justify="space-between" py={4} px="xs"
-                style={{ borderRadius: 'var(--mantine-radius-xs)', backgroundColor: 'var(--mantine-color-dark-6)' }}>
+                style={{ borderRadius: 'var(--mantine-radius-xs)', backgroundColor: 'var(--mantine-color-default)' }}>
                 <Group gap="sm">
                   <Text size="sm" fw={500}>{f.name}</Text>
                   <Badge size="xs" variant="light">{typeLabels[f.field_type] ?? f.field_type}</Badge>

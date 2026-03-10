@@ -107,8 +107,13 @@ export const searchApi = {
 };
 
 export const scanApi = {
-  start: (volumeId: number, mode: 'full' | 'quick' = 'full') =>
-    invoke<ScanStats>('start_scan', { volumeId, mode }),
+  start: (volumeId: number, mode: 'full' | 'quick' = 'full', opts?: { maxDepth?: number; computeHash?: boolean; generateThumbs?: boolean }) =>
+    invoke<ScanStats>('start_scan', {
+      volumeId, mode,
+      maxDepth: opts?.maxDepth ?? null,
+      computeHash: opts?.computeHash ?? null,
+      generateThumbs: opts?.generateThumbs ?? null,
+    }),
   onEvent: (cb: (e: ScanEvent) => void): Promise<UnlistenFn> =>
     listen<ScanEvent>('scan-event', (e) => cb(e.payload)),
 };

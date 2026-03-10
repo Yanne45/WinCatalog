@@ -12,7 +12,7 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::db::{Database, DbError, DbResult};
+use crate::db::{Database, DbError};
 
 #[derive(Error, Debug)]
 pub enum AiError {
@@ -131,8 +131,13 @@ pub struct ClassifyResult {
 pub fn classify_document(
     db: &Database, config: &AiConfig, entry_id: i64, text: &str,
 ) -> AiResult<ClassifyResult> {
-    // Truncate text to first 2000 chars for classification
-    let truncated = if text.len() > 2000 { &text[..2000] } else { text };
+    // Truncate text to first ~2000 chars for classification (char-boundary safe)
+    let truncated = if text.len() > 2000 {
+        let end = text.floor_char_boundary(2000);
+        &text[..end]
+    } else {
+        text
+    };
 
     let prompt = format!(
         "Classify this document. Respond ONLY with JSON: {{\"doc_type\": \"...\", \"labels\": [...], \"confidence\": 0.0-1.0}}\n\
@@ -178,9 +183,11 @@ pub fn classify_document(
 pub fn summarize_document(
     db: &Database, config: &AiConfig, entry_id: i64, text: &str,
 ) -> AiResult<String> {
-    // Use first 4000 chars + last 1000 chars for summary
+    // Use first ~4000 chars + last ~1000 chars for summary (char-boundary safe)
     let input = if text.len() > 5000 {
-        format!("{}...\n\n[...]\n\n{}", &text[..4000], &text[text.len()-1000..])
+        let head_end = text.floor_char_boundary(4000);
+        let tail_start = text.ceil_char_boundary(text.len().saturating_sub(1000));
+        format!("{}...\n\n[...]\n\n{}", &text[..head_end], &text[tail_start..])
     } else {
         text.to_string()
     };
@@ -271,26 +278,93 @@ pub fn analyze_image(
 // Generic AI API call (HTTP client stub)
 // ============================================================================
 
-/// Call the AI API. In a real implementation, this uses reqwest.
-/// For now, it's a stub that returns an error — the actual HTTP call
-/// will be implemented when reqwest is added to dependencies.
+/// Call the AI API via reqwest (blocking).
+/// Supports Anthropic (Claude) and OpenAI-compatible endpoints.
 fn call_ai_api(config: &AiConfig, prompt: &str) -> AiResult<String> {
-    // TODO: Implement actual HTTP call with reqwest
-    // For Anthropic:
-    //   POST https://api.anthropic.com/v1/messages
-    //   Headers: x-api-key, anthropic-version, content-type
-    //   Body: { model, max_tokens, messages: [{role: "user", content: prompt}] }
-    //
-    // For OpenAI:
-    //   POST https://api.openai.com/v1/chat/completions
-    //   Headers: Authorization: Bearer {key}, content-type
-    //   Body: { model, messages: [{role: "user", content: prompt}] }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| AiError::Api(format!("HTTP client: {}", e)))?;
 
-    Err(AiError::Api(format!(
-        "AI HTTP client not yet implemented (provider: {}, model: {}). \
-         Add reqwest to Cargo.toml and implement call_ai_api.",
-        config.provider, config.model
-    )))
+    match config.provider.as_str() {
+        "anthropic" => call_anthropic(&client, config, prompt),
+        "openai" => call_openai(&client, config, prompt),
+        other => Err(AiError::Api(format!("Unknown AI provider: {}", other))),
+    }
+}
+
+fn call_anthropic(
+    client: &reqwest::blocking::Client, config: &AiConfig, prompt: &str,
+) -> AiResult<String> {
+    let body = serde_json::json!({
+        "model": config.model,
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": prompt}]
+    });
+
+    let resp = client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", &config.api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .map_err(|e| AiError::Api(format!("Anthropic request: {}", e)))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().unwrap_or_default();
+        return Err(AiError::Api(format!("Anthropic {} : {}", status, text)));
+    }
+
+    let json: serde_json::Value = resp.json()
+        .map_err(|e| AiError::Parse(format!("Anthropic response: {}", e)))?;
+
+    // Extract text from content[0].text
+    json.get("content")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|block| block.get("text"))
+        .and_then(|t| t.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| AiError::Parse("No text in Anthropic response".into()))
+}
+
+fn call_openai(
+    client: &reqwest::blocking::Client, config: &AiConfig, prompt: &str,
+) -> AiResult<String> {
+    let body = serde_json::json!({
+        "model": config.model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 1024,
+    });
+
+    let resp = client
+        .post("https://api.openai.com/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", config.api_key))
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .map_err(|e| AiError::Api(format!("OpenAI request: {}", e)))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().unwrap_or_default();
+        return Err(AiError::Api(format!("OpenAI {} : {}", status, text)));
+    }
+
+    let json: serde_json::Value = resp.json()
+        .map_err(|e| AiError::Parse(format!("OpenAI response: {}", e)))?;
+
+    // Extract content from choices[0].message.content
+    json.get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|msg| msg.get("content"))
+        .and_then(|t| t.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| AiError::Parse("No content in OpenAI response".into()))
 }
 
 fn ts() -> i64 {

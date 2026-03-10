@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Box, Group, Text, ActionIcon, Tooltip, Progress,
+  Box, Group, Stack, Text, ActionIcon, Tooltip, Progress,
 } from '@mantine/core';
 import {
   IconPlayerPlay, IconPlayerPause, IconPlayerStop,
@@ -81,7 +81,7 @@ function WaveformBars({
       style={{
         display: 'flex', alignItems: 'center', gap, cursor: 'pointer',
         borderRadius: 'var(--mantine-radius-xs)',
-        backgroundColor: 'var(--mantine-color-dark-6)',
+        backgroundColor: 'var(--mantine-color-default)',
         padding: '0 4px',
         overflow: 'hidden',
       }}
@@ -96,7 +96,7 @@ function WaveformBars({
               width: barWidth,
               height: barHeight,
               borderRadius: 1,
-              backgroundColor: played ? color : 'var(--mantine-color-dark-4)',
+              backgroundColor: played ? color : 'var(--mantine-color-default-border)',
               transition: 'background-color 60ms ease-out',
               flexShrink: 0,
             }}

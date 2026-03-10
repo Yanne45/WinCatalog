@@ -61,8 +61,8 @@ impl ThumbSize {
 
 pub fn cache_path(cache_dir: &Path, quick_hash: Option<&str>, entry_id: i64, size: &ThumbSize) -> PathBuf {
     match quick_hash {
-        Some(h) if h.len() >= 2 => cache_dir.join(&h[..2]).join(format!("{}_{}.webp", h, size.suffix())),
-        _ => cache_dir.join("by_id").join(format!("{}_{}.webp", entry_id, size.suffix())),
+        Some(h) if h.len() >= 2 => cache_dir.join(&h[..2]).join(format!("{}_{}.jpg", h, size.suffix())),
+        _ => cache_dir.join("by_id").join(format!("{}_{}.jpg", entry_id, size.suffix())),
     }
 }
 
@@ -107,7 +107,7 @@ pub fn generate(
     if out_path.exists() {
         return Ok(Some(ThumbOutput {
             path: out_path, width: 0, height: 0, bytes: 0,
-            mime: "image/webp".into(), source: ThumbSource::Cached,
+            mime: "image/jpeg".into(), source: ThumbSource::Cached,
         }));
     }
 
@@ -140,25 +140,24 @@ fn gen_image(source: &Path, out: &Path, size: &ThumbSize) -> ThumbResult<ThumbOu
 
     if w <= size.max_width && h <= size.max_height {
         // Already small enough — encode directly, no resize allocation
-        save_webp_lossy(&img, out, size.quality)?;
+        save_jpeg(&img, out, size.quality)?;
     } else {
         let thumb = img.resize(size.max_width, size.max_height, FilterType::Lanczos3);
-        save_webp_lossy(&thumb, out, size.quality)?;
+        save_jpeg(&thumb, out, size.quality)?;
     }
 
     let meta = fs::metadata(out)?;
     // Read actual dimensions from the saved image? Not critical — the UI can derive from aspect ratio.
     Ok(ThumbOutput {
         path: out.into(), width: w.min(size.max_width), height: h.min(size.max_height),
-        bytes: meta.len() as i64, mime: "image/webp".into(), source: ThumbSource::Generated,
+        bytes: meta.len() as i64, mime: "image/jpeg".into(), source: ThumbSource::Generated,
     })
 }
 
 /// Save thumbnail as lossy JPEG.
 /// JPEG is fast to encode, universally supported, and provides good quality/size
 /// ratio for thumbnails. The `quality` parameter controls compression (1-100).
-/// When the `webp` crate is added later, this can switch to lossy WebP.
-fn save_webp_lossy(img: &DynamicImage, path: &Path, quality: u8) -> ThumbResult<()> {
+fn save_jpeg(img: &DynamicImage, path: &Path, quality: u8) -> ThumbResult<()> {
     let rgb = img.to_rgb8();
     let file = fs::File::create(path)?;
     let writer = BufWriter::new(file);
@@ -191,7 +190,7 @@ fn gen_video(source: &Path, out: &Path, size: &ThumbSize) -> ThumbResult<ThumbOu
             let meta = fs::metadata(out)?;
             Ok(ThumbOutput {
                 path: out.into(), width: size.max_width, height: size.max_height,
-                bytes: meta.len() as i64, mime: "image/webp".into(), source: ThumbSource::Generated,
+                bytes: meta.len() as i64, mime: "image/jpeg".into(), source: ThumbSource::Generated,
             })
         }
         Ok(s) => Err(ThumbError::Ffmpeg(format!("exit {:?}", s.code()))),
@@ -341,10 +340,10 @@ fn encode_embedded_image(data: &[u8], out: &Path, size: &ThumbSize) -> ThumbResu
     let (w, h) = (img.width(), img.height());
 
     if w <= size.max_width && h <= size.max_height {
-        save_webp_lossy(&img, out, size.quality)?;
+        save_jpeg(&img, out, size.quality)?;
     } else {
         let thumb = img.resize(size.max_width, size.max_height, FilterType::Lanczos3);
-        save_webp_lossy(&thumb, out, size.quality)?;
+        save_jpeg(&thumb, out, size.quality)?;
     }
 
     let meta = fs::metadata(out)?;

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::bounded;
 
 use super::{run_scan, ScanConfig, ScanEvent, ScanMode, ScanStats, EventCallback};
 use crate::db::Database;
@@ -162,17 +162,23 @@ pub fn run_parallel_scan(
                 exclusions: config.exclusions.clone(),
                 follow_symlinks: false,
                 batch_size: config.batch_size,
+                compute_hash: true,
+                generate_thumbs: true,
             };
 
             let handle = thread::Builder::new()
                 .name(format!("scan-{}", volume_id))
                 .spawn(move || {
-                    // Create a cancel channel that bridges the AtomicBool
+                    // Create a cancel channel that bridges the AtomicBool.
+                    // Use a separate stop flag so the watcher exits when the scan finishes.
                     let (cancel_tx_inner, cancel_rx_inner) = bounded(1);
                     let flag = cancel_clone.clone();
-                    let _watcher = thread::spawn(move || {
+                    let stop_watcher = Arc::new(AtomicBool::new(false));
+                    let stop_flag = stop_watcher.clone();
+                    let watcher_handle = thread::spawn(move || {
                         loop {
                             if flag.load(Ordering::Relaxed) { let _ = cancel_tx_inner.send(()); break; }
+                            if stop_flag.load(Ordering::Relaxed) { break; }
                             thread::sleep(std::time::Duration::from_millis(100));
                         }
                     });
@@ -186,6 +192,10 @@ pub fn run_parallel_scan(
                     });
 
                     let result = run_scan(&db_clone, scan_config, cancel_rx_inner, event_cb);
+
+                    // Stop the watcher thread cleanly
+                    stop_watcher.store(true, Ordering::Relaxed);
+                    let _ = watcher_handle.join();
 
                     let vol_result = match result {
                         Ok(stats) => VolumeScanResult { volume_id, stats: Some(stats), error: None },

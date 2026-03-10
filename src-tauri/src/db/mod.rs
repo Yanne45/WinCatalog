@@ -1,6 +1,6 @@
 // ============================================================================
 // WinCatalog — db/mod.rs
-// Writer thread + read-only connection (WAL concurrent reads/writes)
+// Writer thread + read-only connection pool (WAL concurrent reads/writes)
 // ============================================================================
 
 pub mod pragmas;
@@ -10,12 +10,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 
-use crossbeam_channel::{bounded, Sender};
-use parking_lot::Mutex;
+use crossbeam_channel::{bounded, Sender, Receiver};
 use rusqlite::{Connection, OpenFlags, Transaction};
 use thiserror::Error;
 
 const SCHEMA_VERSION: i64 = 1;
+
+/// Number of read-only connections in the pool.
+/// Allows concurrent reads from multiple Tauri command handlers.
+const READER_POOL_SIZE: usize = 4;
 
 #[derive(Error, Debug)]
 pub enum DbError {
@@ -34,15 +37,62 @@ pub enum DbError {
 pub type DbResult<T> = Result<T, DbError>;
 type DbTask = Box<dyn FnOnce(&mut Connection) + Send>;
 
+/// Channel-based read connection pool.
+/// Connections are borrowed via recv() and returned via send().
+#[derive(Clone)]
+struct ReaderPool {
+    tx: Sender<Connection>,
+    rx: Receiver<Connection>,
+}
+
+impl ReaderPool {
+    fn new(path: &Path, count: usize) -> DbResult<Self> {
+        let (tx, rx) = bounded::<Connection>(count);
+        for _ in 0..count {
+            let conn = Connection::open_with_flags(
+                path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_URI,
+            )?;
+            pragmas::apply_read_only(&conn)?;
+            tx.send(conn).map_err(|_| DbError::Execution("Pool init failed".into()))?;
+        }
+        Ok(Self { tx, rx })
+    }
+
+    fn new_memory(uri: &str, count: usize) -> DbResult<Self> {
+        let (tx, rx) = bounded::<Connection>(count);
+        for _ in 0..count {
+            let conn = Connection::open_with_flags(
+                uri,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+            )?;
+            pragmas::apply_read_only(&conn)?;
+            tx.send(conn).map_err(|_| DbError::Execution("Pool init failed".into()))?;
+        }
+        Ok(Self { tx, rx })
+    }
+
+    /// Borrow a connection, run `f`, then return it to the pool.
+    fn use_conn<F, T>(&self, f: F) -> DbResult<T>
+    where F: FnOnce(&Connection) -> DbResult<T>,
+    {
+        let conn = self.rx.recv().map_err(|_| DbError::Execution("Reader pool empty".into()))?;
+        let result = f(&conn);
+        // Always return the connection, even on error
+        let _ = self.tx.send(conn);
+        result
+    }
+}
+
 /// Thread-safe database handle.
 ///
-/// - `read()` → read-only connection (Mutex, fast, non-blocking vs writes)
+/// - `read()` → borrows from a pool of read-only connections (non-blocking vs writes)
 /// - `write()` / `write_transaction()` → writer thread (serialized)
 /// - WAL mode: reads never block writes, writes never block reads
 #[derive(Clone)]
 pub struct Database {
     writer_tx: Sender<DbTask>,
-    reader: Arc<Mutex<Connection>>,
+    readers: Arc<ReaderPool>,
     path: PathBuf,
 }
 
@@ -50,37 +100,43 @@ impl Database {
     pub fn open(path: impl AsRef<Path>) -> DbResult<Self> {
         let path = path.as_ref().to_path_buf();
 
-        // Writer thread
+        // Writer thread — uses a channel to signal readiness back to the caller
         let writer_path = path.clone();
         let (writer_tx, writer_rx) = bounded::<DbTask>(256);
+        let (ready_tx, ready_rx) = bounded::<Result<(), String>>(1);
         thread::Builder::new()
             .name("db-writer".into())
             .spawn(move || {
                 let mut conn = match Connection::open(&writer_path) {
                     Ok(c) => c,
-                    Err(e) => { log::error!("DB writer open failed: {}", e); return; }
+                    Err(e) => { let _ = ready_tx.send(Err(format!("DB open: {}", e))); return; }
                 };
                 if let Err(e) = pragmas::apply_all(&conn) {
-                    log::error!("Pragmas failed: {}", e); return;
+                    let _ = ready_tx.send(Err(format!("Pragmas: {}", e))); return;
                 }
                 if let Err(e) = run_migrations(&mut conn) {
-                    log::error!("Migration failed: {}", e); return;
+                    let _ = ready_tx.send(Err(format!("Migration: {}", e))); return;
                 }
                 log::info!("DB writer ready: {}", writer_path.display());
+                let _ = ready_tx.send(Ok(()));
                 while let Ok(task) = writer_rx.recv() { task(&mut conn); }
                 let _ = conn.execute_batch("PRAGMA optimize; PRAGMA wal_checkpoint(TRUNCATE);");
                 log::info!("DB writer shutdown");
             })
             .map_err(|e| DbError::Execution(format!("Spawn writer: {}", e)))?;
 
-        // Read-only connection
-        let reader_conn = Connection::open_with_flags(
-            &path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_URI,
-        )?;
-        pragmas::apply_read_only(&reader_conn)?;
+        // Wait for the writer to finish creating/migrating the DB before opening readers
+        match ready_rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(DbError::Execution(e)),
+            Err(_) => return Err(DbError::WriterDisconnected),
+        }
 
-        let db = Self { writer_tx, reader: Arc::new(Mutex::new(reader_conn)), path };
+        // Read-only connection pool
+        let readers = ReaderPool::new(&path, READER_POOL_SIZE)?;
+        log::info!("DB reader pool ready: {} connections", READER_POOL_SIZE);
+
+        let db = Self { writer_tx, readers: Arc::new(readers), path };
 
         // Verify alive
         db.write(|conn| {
@@ -111,25 +167,21 @@ impl Database {
         // Small delay for writer to finish migrations before reader connects
         std::thread::sleep(std::time::Duration::from_millis(50));
 
-        let reader_conn = Connection::open_with_flags(
-            uri,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-        )?;
-        pragmas::apply_read_only(&reader_conn)?;
+        let readers = ReaderPool::new_memory(uri, READER_POOL_SIZE)?;
 
         Ok(Self {
             writer_tx,
-            reader: Arc::new(Mutex::new(reader_conn)),
+            readers: Arc::new(readers),
             path: PathBuf::from(":memory:"),
         })
     }
 
-    /// Read-only query. Non-blocking vs writes.
+    /// Read-only query. Borrows a connection from the pool.
+    /// Multiple reads can run concurrently (up to READER_POOL_SIZE).
     pub fn read<F, T>(&self, f: F) -> DbResult<T>
     where F: FnOnce(&Connection) -> DbResult<T>,
     {
-        let conn = self.reader.lock();
-        f(&conn)
+        self.readers.use_conn(f)
     }
 
     /// Single write statement on writer thread.
@@ -214,9 +266,9 @@ mod tests {
             Ok(())
         }).unwrap();
 
-        // Read via reader connection
+        // Read via reader pool
         let count: i64 = db.read(|conn| {
-            conn.query_row("SELECT COUNT(*) FROM locations", [], |row| row.get(0))
+            Ok(conn.query_row("SELECT COUNT(*) FROM locations", [], |row| row.get(0))?)
         }).unwrap();
         assert_eq!(count, 1);
     }
@@ -224,14 +276,37 @@ mod tests {
     #[test]
     fn test_transaction_rollback() {
         let db = Database::open_memory().unwrap();
-        let _ = db.write_transaction(|tx| {
+        let _: DbResult<()> = db.write_transaction(|tx| {
             tx.execute("INSERT INTO locations(name, created_at) VALUES ('X', 1)", [])
                 .map_err(DbError::Sqlite)?;
             Err(DbError::Migration("rollback".into()))
         });
         let count: i64 = db.read(|conn| {
-            conn.query_row("SELECT COUNT(*) FROM locations", [], |row| row.get(0))
+            Ok(conn.query_row("SELECT COUNT(*) FROM locations", [], |row| row.get(0))?)
         }).unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_concurrent_reads() {
+        let db = Database::open_memory().unwrap();
+        db.write(|conn| {
+            conn.execute("INSERT INTO locations(name, created_at) VALUES ('A', 1)", [])?;
+            Ok(())
+        }).unwrap();
+
+        // Spawn multiple reader threads to verify pool works
+        let handles: Vec<_> = (0..READER_POOL_SIZE * 2).map(|_| {
+            let db = db.clone();
+            std::thread::spawn(move || {
+                db.read(|conn| {
+                    let c: i64 = conn.query_row("SELECT COUNT(*) FROM locations", [], |r| r.get(0))
+                        .map_err(DbError::Sqlite)?;
+                    assert_eq!(c, 1);
+                    Ok(())
+                }).unwrap();
+            })
+        }).collect();
+        for h in handles { h.join().unwrap(); }
     }
 }

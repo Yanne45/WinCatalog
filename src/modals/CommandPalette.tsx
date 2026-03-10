@@ -63,17 +63,12 @@ function ResultRow({
       w="100%"
       py={8} px="sm"
       onClick={onClick}
+      className="wc-hoverable"
+      data-active={active || undefined}
       style={{
         display: 'flex', alignItems: 'center', gap: 10,
         borderRadius: 'var(--mantine-radius-sm)',
-        backgroundColor: active ? 'var(--mantine-color-primary-9)' : 'transparent',
-        transition: 'background-color 80ms ease-out',
-      }}
-      onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
-        if (!active) e.currentTarget.style.backgroundColor = 'var(--mantine-color-dark-6)';
-      }}
-      onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
-        if (!active) e.currentTarget.style.backgroundColor = 'transparent';
+        backgroundColor: active ? 'var(--mantine-color-primary-light)' : 'transparent',
       }}
     >
       <Box style={{ color: 'var(--mantine-color-dimmed)', flexShrink: 0 }}>{icon}</Box>
@@ -237,8 +232,8 @@ export default function CommandPalette({
       overlayProps={{ backgroundOpacity: 0.4, blur: 4 }}
       styles={{
         content: {
-          backgroundColor: 'var(--mantine-color-dark-7)',
-          border: '1px solid var(--mantine-color-dark-4)',
+          backgroundColor: 'var(--mantine-color-body)',
+          border: '1px solid var(--mantine-color-default-border)',
         },
       }}
     >
@@ -266,7 +261,7 @@ export default function CommandPalette({
         />
       </Box>
 
-      <Divider color="var(--mantine-color-dark-5)" />
+      <Divider color="var(--mantine-color-default-border)" />
 
       {/* Results */}
       <ScrollArea.Autosize mah={400} type="auto">
@@ -299,7 +294,7 @@ export default function CommandPalette({
 
           {searchResults.length > 0 && (
             <>
-              <Divider color="var(--mantine-color-dark-5)" my={4} />
+              <Divider color="var(--mantine-color-default-border)" my={4} />
               <Text size="xs" fw={600} c="dimmed" px="sm" pt={4} pb={2}>
                 Fichiers ({searchResults.length})
               </Text>
@@ -329,7 +324,7 @@ export default function CommandPalette({
       </ScrollArea.Autosize>
 
       {/* Footer hints */}
-      <Divider color="var(--mantine-color-dark-5)" />
+      <Divider color="var(--mantine-color-default-border)" />
       <Group px="md" py={6} justify="center" gap="lg">
         <Group gap={4}>
           <Kbd size="xs">↑↓</Kbd>

@@ -5,7 +5,7 @@ edition = "2021"
 
 [lib]
 name = "wincatalog_lib"
-crate-type = ["lib", "cdylib", "staticlib"]
+crate-type = ["lib", "staticlib"]
 
 [[bin]]
 name = "wincatalog"
@@ -51,6 +51,9 @@ mime_guess = "2"
 
 # Platform directories
 dirs-next = "2"
+
+# HTTP client (AI API calls)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

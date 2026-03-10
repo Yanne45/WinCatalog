@@ -3,12 +3,13 @@
 // Explorer: breadcrumb, sortable columns, list/grid, inspector, tags
 // ============================================================================
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Box, Group, Stack, Text, Paper, ActionIcon, TextInput, Tooltip,
-  ScrollArea, Skeleton, Badge, Divider, SegmentedControl,
+  ScrollArea, Skeleton, Badge, Divider, SegmentedControl, Button,
   Breadcrumbs, Anchor, UnstyledButton,
 } from '@mantine/core';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   IconArrowLeft, IconArrowRight, IconArrowUp, IconSearch,
   IconList, IconGridDots, IconInfoCircle, IconFolder, IconFile,
@@ -16,7 +17,7 @@ import {
   IconTag,
 } from '@tabler/icons-react';
 import {
-  volumeApi, entryApi, tagApi, formatBytes, formatDate,
+  volumeApi, entryApi, tagApi, searchApi, formatBytes, formatDate,
   type Volume, type EntrySlim, type FileKind,
 } from '../../api/tauri';
 import { FILE_KIND_COLORS } from '../../app/theme';
@@ -90,14 +91,13 @@ function ListRow({
     <UnstyledButton
       w="100%" onClick={onClick} onDoubleClick={onDoubleClick}
       py={6} px="sm"
+      className="wc-hoverable"
+      data-active={selected || undefined}
       style={{
         display: 'flex', alignItems: 'center', gap: 8,
         borderRadius: 'var(--mantine-radius-xs)',
-        backgroundColor: selected ? 'var(--mantine-color-primary-9)' : 'transparent',
-        transition: 'background-color 80ms ease-out',
+        backgroundColor: selected ? 'var(--mantine-color-primary-light)' : 'transparent',
       }}
-      onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => { if (!selected) e.currentTarget.style.backgroundColor = 'var(--mantine-color-dark-6)'; }}
-      onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => { if (!selected) e.currentTarget.style.backgroundColor = 'transparent'; }}
     >
       <FileIcon kind={entry.kind} isDir={entry.is_dir} />
       <Text size="sm" fw={entry.is_dir ? 500 : 400} style={{ flex: 1, minWidth: 0 }} lineClamp={1}>
@@ -136,17 +136,17 @@ function GridCard({
   return (
     <UnstyledButton
       onClick={onClick} onDoubleClick={onDoubleClick} p="sm"
+      className="wc-hoverable"
+      data-active={selected || undefined}
       style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
         borderRadius: 'var(--mantine-radius-sm)',
-        backgroundColor: selected ? 'var(--mantine-color-primary-9)' : 'transparent',
+        backgroundColor: selected ? 'var(--mantine-color-primary-light)' : 'transparent',
         border: `1px solid ${selected ? 'var(--mantine-color-primary-7)' : 'transparent'}`,
-        transition: 'all 80ms ease-out', width: 120,
+        width: 120,
       }}
-      onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => { if (!selected) e.currentTarget.style.backgroundColor = 'var(--mantine-color-dark-6)'; }}
-      onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => { if (!selected) e.currentTarget.style.backgroundColor = 'transparent'; }}
     >
-      <Box w={64} h={64} style={{ borderRadius: 'var(--mantine-radius-sm)', backgroundColor: 'var(--mantine-color-dark-6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <Box w={64} h={64} style={{ borderRadius: 'var(--mantine-radius-sm)', backgroundColor: 'var(--mantine-color-default)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         {entry.is_dir ? <IconFolder size={32} stroke={1} style={{ color: '#facc15' }} /> : <Text size="xl">{info.icon}</Text>}
       </Box>
       <Text size="xs" ta="center" lineClamp={2} w={100}>{entry.name}</Text>
@@ -182,8 +182,8 @@ function InspectorPanel({
         </Group>
 
         {/* Preview placeholder */}
-        <Box h={160} style={{ borderRadius: 'var(--mantine-radius-sm)', backgroundColor: 'var(--mantine-color-dark-6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {entry.is_dir ? <IconFolder size={48} stroke={1} style={{ color: '#facc15' }} /> : <Text size={48}>{info.icon}</Text>}
+        <Box h={160} style={{ borderRadius: 'var(--mantine-radius-sm)', backgroundColor: 'var(--mantine-color-default)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {entry.is_dir ? <IconFolder size={48} stroke={1} style={{ color: '#facc15' }} /> : <Text fz={48}>{info.icon}</Text>}
         </Box>
 
         <div>
@@ -191,7 +191,7 @@ function InspectorPanel({
           <KindBadge kind={entry.kind} />
         </div>
 
-        <Divider color="var(--mantine-color-dark-5)" />
+        <Divider color="var(--mantine-color-default-border)" />
 
         {/* Metadata */}
         <Stack gap={8}>
@@ -204,7 +204,7 @@ function InspectorPanel({
           <Group justify="space-between"><Text size="xs" c="dimmed">Modifié</Text><Text size="xs" fw={500}>{formatDate(entry.mtime)}</Text></Group>
         </Stack>
 
-        <Divider color="var(--mantine-color-dark-5)" />
+        <Divider color="var(--mantine-color-default-border)" />
 
         {/* Tags */}
         <div>
@@ -276,6 +276,86 @@ function PathBreadcrumb({
 }
 
 // ============================================================================
+// Virtualized list view (renders only visible rows)
+// ============================================================================
+
+const ROW_HEIGHT = 34;
+
+function VirtualizedList({
+  entries, selectedId, entryTagsMap, allTags,
+  sortField, sortDir, onSort, onSelect, onDoubleClick,
+  hasMore, loadingMore, onLoadMore,
+}: {
+  entries: EntrySlim[];
+  selectedId: number | null;
+  entryTagsMap: Map<number, TagInfo[]>;
+  allTags: TagInfo[];
+  sortField: SortField; sortDir: SortDir;
+  onSort: (field: SortField) => void;
+  onSelect: (id: number) => void;
+  onDoubleClick: (entry: EntrySlim) => void;
+  hasMore: boolean; loadingMore: boolean;
+  onLoadMore: () => void;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: entries.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 20,
+  });
+
+  return (
+    <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Sortable column headers */}
+      <Group px="sm" py={4} gap={8} mx="xs" style={{ flexShrink: 0 }}>
+        <Box w={18} />
+        <SortHeader label="Nom" field="name" currentField={sortField} currentDir={sortDir} onSort={onSort} />
+        {allTags.length > 0 && <Box w={80} />}
+        <SortHeader label="Taille" field="size" w={70} ta="right" currentField={sortField} currentDir={sortDir} onSort={onSort} />
+        <SortHeader label="Ext" field="ext" w={50} ta="right" currentField={sortField} currentDir={sortDir} onSort={onSort} />
+        <SortHeader label="Modifié" field="mtime" w={120} ta="right" currentField={sortField} currentDir={sortDir} onSort={onSort} />
+      </Group>
+      <Divider color="var(--mantine-color-default-border)" mb={2} mx="xs" />
+
+      {/* Virtualized scroll container */}
+      <div ref={parentRef} style={{ flex: 1, overflow: 'auto', paddingLeft: 8, paddingRight: 8 }}>
+        <div style={{ height: rowVirtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
+          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+            const entry = entries[virtualRow.index];
+            return (
+              <div
+                key={entry.id}
+                style={{
+                  position: 'absolute', top: 0, left: 0, width: '100%',
+                  height: virtualRow.size,
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
+              >
+                <ListRow
+                  entry={entry}
+                  selected={selectedId === entry.id}
+                  tags={entryTagsMap.get(entry.id)}
+                  onClick={() => onSelect(entry.id)}
+                  onDoubleClick={() => onDoubleClick(entry)}
+                />
+              </div>
+            );
+          })}
+        </div>
+        {hasMore && (
+          <Box ta="center" py="sm">
+            <Button variant="subtle" size="xs" onClick={onLoadMore} loading={loadingMore}>
+              Charger plus de fichiers…
+            </Button>
+          </Box>
+        )}
+      </div>
+    </Box>
+  );
+}
+
+// ============================================================================
 // Explorer Screen
 // ============================================================================
 
@@ -290,6 +370,9 @@ export default function ExplorerScreen({
   const [currentPath, setCurrentPath] = useState('');
   const [entries, setEntries] = useState<EntrySlim[]>([]);
   const [loading, setLoading] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const PAGE_SIZE = 200;
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [showInspector, setShowInspector] = useState(false);
@@ -326,38 +409,60 @@ export default function ExplorerScreen({
     setLoading(true);
     setSelectedId(null);
     setFilterTagId(null);
-    entryApi.list(activeVolume.id, currentPath).then((data) => {
-      if (!cancelled) { setEntries(data); setLoading(false); }
+    setHasMore(false);
+    entryApi.list(activeVolume.id, currentPath, undefined, PAGE_SIZE).then((data) => {
+      if (!cancelled) {
+        setEntries(data);
+        setHasMore(data.length >= PAGE_SIZE);
+        setLoading(false);
+      }
     }).catch(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [activeVolume, currentPath]);
 
+  // Load more entries (pagination)
+  const loadMore = useCallback(async () => {
+    if (!activeVolume || !currentPath || loadingMore || !hasMore) return;
+    const last = entries[entries.length - 1];
+    if (!last) return;
+    setLoadingMore(true);
+    try {
+      const more = await entryApi.list(activeVolume.id, currentPath, { mtime: last.mtime ?? 0, id: last.id }, PAGE_SIZE);
+      setEntries((prev) => [...prev, ...more]);
+      setHasMore(more.length >= PAGE_SIZE);
+    } catch { /* ignore */ }
+    setLoadingMore(false);
+  }, [activeVolume, currentPath, entries, loadingMore, hasMore]);
+
   // Load tags for visible entries (batch)
   useEffect(() => {
-    if (entries.length === 0) return;
+    if (entries.length === 0) { setEntryTagsMap(new Map()); return; }
+    let cancelled = false;
     const map = new Map<number, TagInfo[]>();
     // Load tags for first 100 entries to avoid overload
     const toLoad = entries.slice(0, 100);
     Promise.all(toLoad.map(async (e) => {
       try {
         const tags = await tagApi.getEntryTags(e.id);
-        if (tags.length > 0) {
+        if (!cancelled && tags.length > 0) {
           map.set(e.id, tags.map(([id, name, color]) => ({ id, name, color })));
         }
       } catch { /* ignore */ }
-    })).then(() => setEntryTagsMap(new Map(map)));
-
-    // Also load all available tags for the tag filter / inspector
-    // Simple approach: load from a few entries, or keep a cached list
-    // For now we build from what we find
+    })).then(() => { if (!cancelled) setEntryTagsMap(new Map(map)); });
+    return () => { cancelled = true; };
   }, [entries]);
 
   // Load all tags (for filter sidebar + inspector)
   useEffect(() => {
-    // We don't have a list_tags command yet, so build from entryTagsMap
-    const seen = new Map<number, TagInfo>();
-    entryTagsMap.forEach((tags) => tags.forEach((t) => seen.set(t.id, t)));
-    setAllTags(Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name)));
+    tagApi.list().then((tags) => {
+      setAllTags(tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))
+        .sort((a, b) => a.name.localeCompare(b.name)));
+    }).catch(() => {
+      // Fallback: build from entryTagsMap
+      const seen = new Map<number, TagInfo>();
+      entryTagsMap.forEach((tags) => tags.forEach((t) => seen.set(t.id, t)));
+      setAllTags(Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name)));
+    });
   }, [entryTagsMap]);
 
   // Add tag to entry
@@ -442,12 +547,42 @@ export default function ExplorerScreen({
     return [...dirs, ...files];
   }, [entries, sortField, sortDir]);
 
+  // FTS5 search: debounced query for 3+ chars
+  const [ftsResultIds, setFtsResultIds] = useState<Set<number> | null>(null);
+  const ftsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (ftsTimerRef.current) clearTimeout(ftsTimerRef.current);
+
+    if (searchQuery.length < 3) {
+      setFtsResultIds(null); // Use local filter
+      return;
+    }
+
+    ftsTimerRef.current = setTimeout(async () => {
+      try {
+        const results = await searchApi.entries(searchQuery, 500);
+        setFtsResultIds(new Set(results.map((r) => r.id)));
+      } catch {
+        setFtsResultIds(null); // Fallback to local filter
+      }
+    }, 300);
+
+    return () => { if (ftsTimerRef.current) clearTimeout(ftsTimerRef.current); };
+  }, [searchQuery]);
+
   // Filter by search query + tag
   const filteredEntries = useMemo(() => {
     let result = sortedEntries;
     if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      result = result.filter((e) => e.name.toLowerCase().includes(q));
+      if (ftsResultIds != null) {
+        // FTS5 result filtering (3+ chars)
+        result = result.filter((e) => ftsResultIds.has(e.id));
+      } else {
+        // Local filter (1-2 chars)
+        const q = searchQuery.toLowerCase();
+        result = result.filter((e) => e.name.toLowerCase().includes(q));
+      }
     }
     if (filterTagId != null) {
       result = result.filter((e) => {
@@ -456,20 +591,54 @@ export default function ExplorerScreen({
       });
     }
     return result;
-  }, [sortedEntries, searchQuery, filterTagId, entryTagsMap]);
+  }, [sortedEntries, searchQuery, ftsResultIds, filterTagId, entryTagsMap]);
 
   const totalSize = useMemo(() => entries.filter((e) => !e.is_dir).reduce((s, e) => s + e.size_bytes, 0), [entries]);
 
+  // Keyboard navigation
+  const containerRef = useRef<HTMLDivElement>(null);
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (filteredEntries.length === 0) return;
+    const currentIdx = filteredEntries.findIndex((entry) => entry.id === selectedId);
+
+    switch (e.key) {
+      case 'ArrowDown': {
+        e.preventDefault();
+        const nextIdx = currentIdx < filteredEntries.length - 1 ? currentIdx + 1 : 0;
+        setSelectedId(filteredEntries[nextIdx].id);
+        break;
+      }
+      case 'ArrowUp': {
+        e.preventDefault();
+        const prevIdx = currentIdx > 0 ? currentIdx - 1 : filteredEntries.length - 1;
+        setSelectedId(filteredEntries[prevIdx].id);
+        break;
+      }
+      case 'Enter': {
+        if (currentIdx >= 0) {
+          e.preventDefault();
+          handleDoubleClick(filteredEntries[currentIdx]);
+        }
+        break;
+      }
+      case 'Backspace': {
+        e.preventDefault();
+        goUp();
+        break;
+      }
+    }
+  }, [filteredEntries, selectedId, handleDoubleClick, goUp]);
+
   return (
-    <Box h="100%" style={{ display: 'flex', flexDirection: 'column' }}>
+    <Box h="100%" style={{ display: 'flex', flexDirection: 'column' }} tabIndex={0} onKeyDown={handleKeyDown} ref={containerRef}>
       {/* Toolbar */}
-      <Box px="sm" py={6} style={{ borderBottom: '1px solid var(--mantine-color-dark-5)', flexShrink: 0 }}>
+      <Box px="sm" py={6} style={{ borderBottom: '1px solid var(--mantine-color-default-border)', flexShrink: 0 }}>
         <Group justify="space-between">
           <Group gap={4}>
             <ActionIcon variant="subtle" size="sm" color="gray" disabled={historyIndex <= 0} onClick={goBack}><IconArrowLeft size={16} /></ActionIcon>
             <ActionIcon variant="subtle" size="sm" color="gray" disabled={historyIndex >= history.length - 1} onClick={goForward}><IconArrowRight size={16} /></ActionIcon>
             <ActionIcon variant="subtle" size="sm" color="gray" onClick={goUp}><IconArrowUp size={16} /></ActionIcon>
-            <Divider orientation="vertical" mx={4} color="var(--mantine-color-dark-5)" />
+            <Divider orientation="vertical" mx={4} color="var(--mantine-color-default-border)" />
             {activeVolume && <PathBreadcrumb volumeLabel={activeVolume.label} currentPath={currentPath} rootPath={activeVolume.root_path} onNavigate={navigateTo} />}
           </Group>
           <Group gap={4}>
@@ -487,11 +656,11 @@ export default function ExplorerScreen({
               value={searchQuery} onChange={(e) => setSearchQuery(e.currentTarget.value)}
               rightSection={searchQuery ? <ActionIcon variant="subtle" size="xs" onClick={() => setSearchQuery('')}><IconX size={12} /></ActionIcon> : null}
             />
-            <Divider orientation="vertical" mx={4} color="var(--mantine-color-dark-5)" />
+            <Divider orientation="vertical" mx={4} color="var(--mantine-color-default-border)" />
             <SegmentedControl
               size="xs" value={viewMode} onChange={(v) => setViewMode(v as ViewMode)}
               data={[{ value: 'list', label: <IconList size={14} /> }, { value: 'grid', label: <IconGridDots size={14} /> }]}
-              styles={{ root: { backgroundColor: 'var(--mantine-color-dark-6)' } }}
+              styles={{ root: { backgroundColor: 'var(--mantine-color-default)' } }}
             />
             <Tooltip label={showInspector ? 'Masquer détails' : 'Afficher détails'}>
               <ActionIcon variant={showInspector ? 'filled' : 'subtle'} size="sm" color={showInspector ? 'primary' : 'gray'} onClick={() => setShowInspector((v) => !v)}>
@@ -503,9 +672,10 @@ export default function ExplorerScreen({
       </Box>
 
       {/* Status bar */}
-      <Box px="sm" py={3} style={{ borderBottom: '1px solid var(--mantine-color-dark-5)', flexShrink: 0 }}>
+      <Box px="sm" py={3} style={{ borderBottom: '1px solid var(--mantine-color-default-border)', flexShrink: 0 }}>
         <Text size="xs" c="dimmed">
           {entries.filter((e) => e.is_dir).length} dossiers, {entries.filter((e) => !e.is_dir).length} fichiers
+          {hasMore && '+'}
           {' • '}{formatBytes(totalSize)}
           {selectedId != null && ' • 1 sélectionné'}
           {filterTagId != null && ' • filtré par tag'}
@@ -514,50 +684,58 @@ export default function ExplorerScreen({
 
       {/* Content area */}
       <Box style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        <ScrollArea style={{ flex: 1 }} type="auto">
-          {loading ? (
-            <Stack p="sm" gap={4}>{Array.from({ length: 20 }).map((_, i) => <Skeleton key={i} height={32} />)}</Stack>
-          ) : filteredEntries.length === 0 ? (
-            <Box ta="center" py={60}>
-              <IconFolder size={40} stroke={1} style={{ color: 'var(--mantine-color-dimmed)', marginBottom: 8 }} />
-              <Text size="sm" c="dimmed">{searchQuery || filterTagId != null ? 'Aucun résultat' : 'Dossier vide'}</Text>
-            </Box>
-          ) : viewMode === 'list' ? (
-            <Stack gap={0} p="xs">
-              {/* Sortable column headers */}
-              <Group px="sm" py={4} gap={8}>
-                <Box w={18} />
-                <SortHeader label="Nom" field="name" currentField={sortField} currentDir={sortDir} onSort={handleSort} />
-                {/* Tags column spacer */}
-                {allTags.length > 0 && <Box w={80} />}
-                <SortHeader label="Taille" field="size" w={70} ta="right" currentField={sortField} currentDir={sortDir} onSort={handleSort} />
-                <SortHeader label="Ext" field="ext" w={50} ta="right" currentField={sortField} currentDir={sortDir} onSort={handleSort} />
-                <SortHeader label="Modifié" field="mtime" w={120} ta="right" currentField={sortField} currentDir={sortDir} onSort={handleSort} />
-              </Group>
-              <Divider color="var(--mantine-color-dark-5)" mb={2} />
-              {filteredEntries.map((entry) => (
-                <ListRow
-                  key={entry.id} entry={entry}
-                  selected={selectedId === entry.id}
-                  tags={entryTagsMap.get(entry.id)}
-                  onClick={() => setSelectedId(entry.id)}
-                  onDoubleClick={() => handleDoubleClick(entry)}
-                />
-              ))}
-            </Stack>
-          ) : (
+        {loading ? (
+          <Stack p="sm" gap={4} style={{ flex: 1 }}>{Array.from({ length: 20 }).map((_, i) => <Skeleton key={i} height={32} />)}</Stack>
+        ) : filteredEntries.length === 0 ? (
+          <Box ta="center" py={60} style={{ flex: 1 }}>
+            <IconFolder size={40} stroke={1} style={{ color: 'var(--mantine-color-dimmed)', marginBottom: 8 }} />
+            <Text size="sm" c="dimmed">{searchQuery || filterTagId != null ? 'Aucun résultat' : 'Dossier vide'}</Text>
+            {searchQuery && (
+              <Button variant="subtle" size="xs" mt="sm" onClick={() => setSearchQuery('')}>Effacer le filtre</Button>
+            )}
+            {filterTagId != null && (
+              <Button variant="subtle" size="xs" mt="sm" onClick={() => setFilterTagId(null)}>Retirer le filtre tag</Button>
+            )}
+            {!searchQuery && filterTagId == null && activeVolume && (
+              <Button variant="subtle" size="xs" mt="sm" onClick={goUp}>Remonter d'un niveau</Button>
+            )}
+          </Box>
+        ) : viewMode === 'list' ? (
+          <VirtualizedList
+            entries={filteredEntries}
+            selectedId={selectedId}
+            entryTagsMap={entryTagsMap}
+            allTags={allTags}
+            sortField={sortField}
+            sortDir={sortDir}
+            onSort={handleSort}
+            onSelect={setSelectedId}
+            onDoubleClick={handleDoubleClick}
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            onLoadMore={loadMore}
+          />
+        ) : (
+          <ScrollArea style={{ flex: 1 }} type="auto">
             <Group gap="xs" p="md" align="flex-start" style={{ flexWrap: 'wrap' }}>
               {filteredEntries.map((entry) => (
                 <GridCard key={entry.id} entry={entry} selected={selectedId === entry.id}
                   onClick={() => setSelectedId(entry.id)} onDoubleClick={() => handleDoubleClick(entry)} />
               ))}
             </Group>
-          )}
-        </ScrollArea>
+            {hasMore && !loading && (
+              <Box ta="center" py="sm">
+                <Button variant="subtle" size="xs" onClick={loadMore} loading={loadingMore}>
+                  Charger plus de fichiers…
+                </Button>
+              </Box>
+            )}
+          </ScrollArea>
+        )}
 
         {/* Inspector */}
         {showInspector && (
-          <Box w={280} style={{ borderLeft: '1px solid var(--mantine-color-dark-5)', flexShrink: 0, backgroundColor: 'var(--mantine-color-dark-7)' }}>
+          <Box w={280} style={{ borderLeft: '1px solid var(--mantine-color-default-border)', flexShrink: 0, backgroundColor: 'var(--mantine-color-body)' }}>
             <InspectorPanel
               entry={selectedEntry}
               entryTags={selectedEntryTags}

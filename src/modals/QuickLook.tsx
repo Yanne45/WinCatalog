@@ -52,7 +52,7 @@ function PreviewContent({ entry, isOnline }: { entry: EntrySlim; isOnline: boole
     case 'image':
       return (
         <Box h={350} style={{
-          backgroundColor: 'var(--mantine-color-dark-6)', borderRadius: 'var(--mantine-radius-sm)',
+          backgroundColor: 'var(--mantine-color-default)', borderRadius: 'var(--mantine-radius-sm)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
           {/* In real app: load from cache path via convertFileSrc */}
@@ -87,7 +87,7 @@ function PreviewContent({ entry, isOnline }: { entry: EntrySlim; isOnline: boole
     case 'audio':
       return (
         <Box h={250} style={{
-          backgroundColor: 'var(--mantine-color-dark-6)', borderRadius: 'var(--mantine-radius-sm)',
+          backgroundColor: 'var(--mantine-color-default)', borderRadius: 'var(--mantine-radius-sm)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
           <Stack align="center" gap="xs">
@@ -102,7 +102,7 @@ function PreviewContent({ entry, isOnline }: { entry: EntrySlim; isOnline: boole
     case 'document':
       return (
         <Box h={350} style={{
-          backgroundColor: 'var(--mantine-color-dark-6)', borderRadius: 'var(--mantine-radius-sm)',
+          backgroundColor: 'var(--mantine-color-default)', borderRadius: 'var(--mantine-radius-sm)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
           <Stack align="center" gap="xs">
@@ -117,11 +117,11 @@ function PreviewContent({ entry, isOnline }: { entry: EntrySlim; isOnline: boole
     default:
       return (
         <Box h={200} style={{
-          backgroundColor: 'var(--mantine-color-dark-6)', borderRadius: 'var(--mantine-radius-sm)',
+          backgroundColor: 'var(--mantine-color-default)', borderRadius: 'var(--mantine-radius-sm)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
           <Stack align="center" gap="xs">
-            <Text size={48}>{info.icon}</Text>
+            <Text fz={48}>{info.icon}</Text>
             <Text size="sm" c="dimmed">Aperçu non disponible</Text>
           </Stack>
         </Box>
@@ -198,11 +198,11 @@ export default function QuickLook({
       centered
       overlayProps={{ backgroundOpacity: 0.5, blur: 4 }}
       styles={{
-        content: { backgroundColor: 'var(--mantine-color-dark-7)', border: '1px solid var(--mantine-color-dark-4)' },
+        content: { backgroundColor: 'var(--mantine-color-body)', border: '1px solid var(--mantine-color-default-border)' },
       }}
     >
       {/* Header */}
-      <Group px="md" py="sm" justify="space-between" style={{ borderBottom: '1px solid var(--mantine-color-dark-5)' }}>
+      <Group px="md" py="sm" justify="space-between" style={{ borderBottom: '1px solid var(--mantine-color-default-border)' }}>
         <Group gap="sm">
           <Badge size="sm" style={{ backgroundColor: `${info.color}18`, color: info.color, border: 'none' }}>
             {info.icon} {entry.kind}
@@ -224,7 +224,7 @@ export default function QuickLook({
         <MetadataSection entry={entry} entryPath={entryPath} />
       </Box>
 
-      <Divider color="var(--mantine-color-dark-5)" />
+      <Divider color="var(--mantine-color-default-border)" />
 
       {/* Footer: nav + actions */}
       <Group px="md" py="sm" justify="space-between">

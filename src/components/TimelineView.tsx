@@ -68,23 +68,18 @@ function MiniCard({
   return (
     <UnstyledButton
       onClick={onClick} onDoubleClick={onDoubleClick}
+      className="wc-hoverable"
+      data-active={selected || undefined}
       style={{
         width: 90, display: 'flex', flexDirection: 'column', alignItems: 'center',
         gap: 4, padding: 6, borderRadius: 'var(--mantine-radius-sm)',
-        backgroundColor: selected ? 'var(--mantine-color-primary-9)' : 'transparent',
+        backgroundColor: selected ? 'var(--mantine-color-primary-light)' : 'transparent',
         border: `1px solid ${selected ? 'var(--mantine-color-primary-7)' : 'transparent'}`,
-        transition: 'all 80ms ease-out',
-      }}
-      onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
-        if (!selected) e.currentTarget.style.backgroundColor = 'var(--mantine-color-dark-6)';
-      }}
-      onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
-        if (!selected) e.currentTarget.style.backgroundColor = 'transparent';
       }}
     >
       <Box w={56} h={56} style={{
         borderRadius: 'var(--mantine-radius-xs)',
-        backgroundColor: 'var(--mantine-color-dark-6)',
+        backgroundColor: 'var(--mantine-color-default)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
         <Text size="lg">{info.icon}</Text>
@@ -165,7 +160,7 @@ export default function TimelineView({ entries, selectedId, onSelect, onDoubleCl
       {/* Vertical timeline bar */}
       <Box style={{
         position: 'absolute', left: 18, top: 0, bottom: 0, width: 2,
-        backgroundColor: 'var(--mantine-color-dark-4)',
+        backgroundColor: 'var(--mantine-color-default-border)',
       }} />
 
       {groups.map((group) => (

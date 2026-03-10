@@ -39,7 +39,7 @@ fn main() {
             let on_vol_event: Option<VolumeEventCallback> = Some(std::sync::Arc::new(move |evt: VolumeEvent| {
                 let _ = app_handle_vol.emit("volume-event", &evt);
             }));
-            let _watcher = VolumeWatcher::start(
+            let volume_watcher = VolumeWatcher::start(
                 database.clone(),
                 std::time::Duration::from_secs(5),
                 on_vol_event,
@@ -57,6 +57,7 @@ fn main() {
                 db: database,
                 job_runner: std::sync::Mutex::new(Some(runner)),
                 watchers: std::sync::Mutex::new(std::collections::HashMap::new()),
+                volume_watcher: std::sync::Mutex::new(Some(volume_watcher)),
             });
             Ok(())
         })

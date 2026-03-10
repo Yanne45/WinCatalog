@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use crossbeam_channel::bounded;
 use rusqlite::{params, OptionalExtension};
-use tauri::{command, AppHandle, Emitter, Manager, State};
+use tauri::{command, AppHandle, Emitter, State};
 
 use crate::core::scanner::{self, ScanConfig, ScanMode, ScanStats};
 use crate::core::scanner::watch::{FsWatcher, WatchConfig, WatchEvent, WatchEventCallback};
@@ -28,6 +28,7 @@ pub struct AppState {
     pub db: Database,
     pub job_runner: Mutex<Option<JobRunner>>,
     pub watchers: Mutex<std::collections::HashMap<i64, FsWatcher>>,
+    pub volume_watcher: Mutex<Option<crate::core::volume_watcher::VolumeWatcher>>,
 }
 
 // ============================================================================
@@ -98,28 +99,35 @@ pub fn search_content(state: State<'_, AppState>, query: String, limit: Option<i
 #[command]
 pub async fn start_scan(
     state: State<'_, AppState>, app: AppHandle, volume_id: i64, mode: String,
+    max_depth: Option<usize>, compute_hash: Option<bool>, generate_thumbs: Option<bool>,
 ) -> Result<ScanStats, String> {
     // Read volume info (via reader — non-blocking)
     let volume = state.db.read(move |c| Ok(queries::get_volume(c, volume_id)?))
         .map_err(|e| e.to_string())?
         .ok_or("Volume not found")?;
 
-    let config = ScanConfig {
+    let mut config = ScanConfig {
         volume_id,
         root_path: PathBuf::from(&volume.root_path),
         mode: if mode == "quick" { ScanMode::Quick } else { ScanMode::Full },
         ..ScanConfig::default()
     };
+    if let Some(d) = max_depth { config.max_depth = Some(d); }
+    if let Some(h) = compute_hash { config.compute_hash = h; }
+    if let Some(t) = generate_thumbs { config.generate_thumbs = t; }
 
     let db = state.db.clone();
-    let (_cancel_tx, cancel_rx) = bounded(1);
+    let (cancel_tx, cancel_rx) = bounded(1);
 
     let app_handle = app.clone();
     let on_event = Box::new(move |evt: scanner::ScanEvent| {
         let _ = app_handle.emit("scan-event", &evt);
     });
 
+    // Keep cancel_tx alive for the duration of the scan so it can be
+    // used to cancel via the channel. Move it into the blocking task.
     tokio::task::spawn_blocking(move || {
+        let _keep_alive = cancel_tx;
         scanner::run_scan(&db, config, cancel_rx, Some(on_event))
     })
     .await
@@ -213,7 +221,7 @@ pub async fn start_hash(
     volume_id: i64, mode: String, min_size: Option<i64>,
 ) -> Result<HashStats, String> {
     let db = state.db.clone();
-    let (_cancel_tx, cancel_rx) = bounded(1);
+    let (cancel_tx, cancel_rx) = bounded(1);
     let app_handle = app.clone();
     let on_event = Box::new(move |evt: hasher::HashEvent| {
         let _ = app_handle.emit("hash-event", &evt);
@@ -221,7 +229,10 @@ pub async fn start_hash(
     let m = mode.clone();
     let ms = min_size.unwrap_or(0);
 
+    // Keep cancel_tx alive for the duration of the hash so it can be
+    // used to cancel via the channel. Move it into the blocking task.
     tokio::task::spawn_blocking(move || {
+        let _keep_alive = cancel_tx;
         hasher::run_hash(&db, volume_id, &m, ms, cancel_rx, Some(on_event))
     })
     .await

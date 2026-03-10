@@ -14,7 +14,7 @@ pub mod kind;
 pub mod watch;
 pub mod parallel;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crossbeam_channel::Receiver;
@@ -23,7 +23,7 @@ use thiserror::Error;
 use walkdir::{DirEntry, WalkDir};
 
 use crate::db::queries::EntryUpsert;
-use crate::db::{Database, DbError, DbResult};
+use crate::db::{Database, DbError};
 
 #[derive(Error, Debug)]
 pub enum ScanError {
@@ -54,6 +54,8 @@ pub struct ScanConfig {
     pub exclusions: Vec<String>,
     pub follow_symlinks: bool,
     pub batch_size: usize,
+    pub compute_hash: bool,
+    pub generate_thumbs: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -72,6 +74,8 @@ impl Default for ScanConfig {
             ],
             follow_symlinks: false,
             batch_size: 500,
+            compute_hash: true,
+            generate_thumbs: true,
         }
     }
 }
@@ -328,35 +332,41 @@ pub fn run_scan(
     // PHASE C — Schedule post-scan jobs + analytics
     // ====================================================================
 
+    let do_hash = config.compute_hash;
+    let do_thumbs = config.generate_thumbs;
     let jobs_scheduled = db.write_transaction(move |tx| {
         let mut jobs: u64 = 0;
 
-        // Hash job
-        let hash_count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM entries WHERE volume_id=?1 AND status='present' AND is_dir=0 AND full_hash IS NULL",
-            params![volume_id], |r| r.get(0),
-        ).map_err(DbError::Sqlite)?;
-        if hash_count > 0 {
-            tx.execute(
-                "INSERT OR IGNORE INTO jobs (type,variant,volume_id,priority,status,created_at,updated_at) VALUES ('hash','full',?1,200,'queued',?2,?2)",
-                params![volume_id, now],
+        // Hash job (conditional on scan option)
+        if do_hash {
+            let hash_count: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM entries WHERE volume_id=?1 AND status='present' AND is_dir=0 AND full_hash IS NULL",
+                params![volume_id], |r| r.get(0),
             ).map_err(DbError::Sqlite)?;
-            jobs += 1;
+            if hash_count > 0 {
+                tx.execute(
+                    "INSERT OR IGNORE INTO jobs (type,variant,volume_id,priority,status,created_at,updated_at) VALUES ('hash','full',?1,200,'queued',?2,?2)",
+                    params![volume_id, now],
+                ).map_err(DbError::Sqlite)?;
+                jobs += 1;
+            }
         }
 
-        // Thumb job
-        let thumb_count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM entries e WHERE e.volume_id=?1 AND e.status='present' AND e.is_dir=0
-               AND e.kind IN ('image','video','document','ebook','audio')
-               AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.entry_id=e.id AND a.role='thumb')",
-            params![volume_id], |r| r.get(0),
-        ).map_err(DbError::Sqlite)?;
-        if thumb_count > 0 {
-            tx.execute(
-                "INSERT OR IGNORE INTO jobs (type,volume_id,priority,status,created_at,updated_at) VALUES ('thumb',?1,300,'queued',?2,?2)",
-                params![volume_id, now],
+        // Thumb job (conditional on scan option)
+        if do_thumbs {
+            let thumb_count: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM entries e WHERE e.volume_id=?1 AND e.status='present' AND e.is_dir=0
+                   AND e.kind IN ('image','video','document','ebook','audio')
+                   AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.entry_id=e.id AND a.role='thumb')",
+                params![volume_id], |r| r.get(0),
             ).map_err(DbError::Sqlite)?;
-            jobs += 1;
+            if thumb_count > 0 {
+                tx.execute(
+                    "INSERT OR IGNORE INTO jobs (type,volume_id,priority,status,created_at,updated_at) VALUES ('thumb',?1,300,'queued',?2,?2)",
+                    params![volume_id, now],
+                ).map_err(DbError::Sqlite)?;
+                jobs += 1;
+            }
         }
 
         // Metadata extraction jobs per kind

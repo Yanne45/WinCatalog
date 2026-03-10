@@ -94,9 +94,11 @@ export default function StatusBar({ contextInfo, onJobClick }: StatusBarProps) {
   const [volumes, setVolumes] = useState<Volume[]>([]);
   const unlistenRef = useRef<(() => void) | null>(null);
 
-  // Poll active jobs every 2s
+  // Adaptive polling: 2s when jobs running, 10s when idle
   useEffect(() => {
     let active = true;
+    let intervalId: ReturnType<typeof setTimeout> | null = null;
+    let hasRunningJobs = false;
 
     const poll = async () => {
       try {
@@ -104,12 +106,22 @@ export default function StatusBar({ contextInfo, onJobClick }: StatusBarProps) {
         if (active) {
           setJobs(j);
           setVolumes(v);
+          const running = j.some((job) => job.status === 'running' || job.status === 'queued');
+          if (running !== hasRunningJobs) {
+            hasRunningJobs = running;
+            schedulePoll(); // Reschedule with new interval
+          }
         }
       } catch { /* ignore */ }
     };
 
+    const schedulePoll = () => {
+      if (intervalId) clearInterval(intervalId);
+      intervalId = setInterval(poll, hasRunningJobs ? 2000 : 10000);
+    };
+
     poll();
-    const interval = setInterval(poll, 2000);
+    schedulePoll();
 
     // Also listen to job events for immediate updates
     jobApi.onEvent((evt) => {
@@ -122,7 +134,7 @@ export default function StatusBar({ contextInfo, onJobClick }: StatusBarProps) {
 
     return () => {
       active = false;
-      clearInterval(interval);
+      if (intervalId) clearInterval(intervalId);
       unlistenRef.current?.();
     };
   }, []);
@@ -131,10 +143,10 @@ export default function StatusBar({ contextInfo, onJobClick }: StatusBarProps) {
   const queuedCount = jobs.filter((j) => j.status === 'queued').length;
 
   return (
-    <Group h="100%" px="md" justify="space-between">
+    <Group h="100%" px="md" justify="space-between" wrap="nowrap" style={{ overflow: 'hidden' }}>
       {/* Left: jobs */}
-      <UnstyledButton onClick={onJobClick} style={{ display: 'flex', alignItems: 'center' }}>
-        <Group gap="lg">
+      <UnstyledButton onClick={onJobClick} style={{ display: 'flex', alignItems: 'center', flexShrink: 1, overflow: 'hidden' }}>
+        <Group gap="lg" wrap="nowrap">
           {runningJobs.length > 0 ? (
             runningJobs.slice(0, 3).map((j) => <JobIndicator key={j.id} job={j} />)
           ) : queuedCount > 0 ? (
@@ -151,12 +163,12 @@ export default function StatusBar({ contextInfo, onJobClick }: StatusBarProps) {
       </UnstyledButton>
 
       {/* Center: contextual info */}
-      <Text size="xs" c="dimmed">
+      <Text size="xs" c="dimmed" style={{ flexShrink: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {contextInfo ?? ''}
       </Text>
 
       {/* Right: volume status */}
-      <Group gap="sm">
+      <Group gap="sm" wrap="nowrap" style={{ flexShrink: 0 }}>
         {volumes.slice(0, 4).map((v) => (
           <VolumeDot key={v.id} volume={v} />
         ))}

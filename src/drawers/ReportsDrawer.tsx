@@ -6,13 +6,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Drawer, Group, Stack, Text, Paper, Button, Select, Checkbox,
-  MultiSelect, Divider, Badge, ScrollArea,
+  MultiSelect, Divider, Badge, ScrollArea, Alert,
 } from '@mantine/core';
 import {
   IconFileText, IconDownload, IconPrinter, IconTable,
-  IconCode, IconFileTypePdf,
+  IconCode, IconFileTypePdf, IconCheck, IconAlertCircle,
 } from '@tabler/icons-react';
-import { volumeApi, formatBytes, type Volume } from '../api/tauri';
+import { volumeApi, exportApi, formatBytes, type Volume } from '../api/tauri';
 
 // ============================================================================
 // Report templates
@@ -34,7 +34,7 @@ const TEMPLATES: ReportTemplate[] = [
   { id: 'full', name: 'Rapport complet', description: 'Toutes les sections combinées', sections: ['volume_summary', 'kind_distribution', 'top_folders', 'duplicates_summary', 'recent_activity'], icon: '📋' },
 ];
 
-type ExportFormat = 'pdf' | 'csv' | 'json' | 'html';
+type ExportFormat = 'csv' | 'json' | 'sqlite';
 
 // ============================================================================
 // Reports Drawer
@@ -49,8 +49,9 @@ export default function ReportsDrawer({ opened, onClose }: ReportsDrawerProps) {
   const [volumes, setVolumes] = useState<Volume[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<string>('full');
   const [selectedVolumes, setSelectedVolumes] = useState<string[]>([]);
-  const [format, setFormat] = useState<ExportFormat>('pdf');
+  const [format, setFormat] = useState<ExportFormat>('json');
   const [generating, setGenerating] = useState(false);
+  const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
 
   useEffect(() => {
     if (opened) {
@@ -65,11 +66,18 @@ export default function ReportsDrawer({ opened, onClose }: ReportsDrawerProps) {
 
   const handleGenerate = useCallback(async () => {
     setGenerating(true);
+    setResult(null);
     try {
-      // TODO: call actual report generation command when implemented
-      // For now, simulate delay
-      await new Promise((r) => setTimeout(r, 1500));
-      console.log('Generate report:', { template: selectedTemplate, volumes: selectedVolumes, format });
+      // Build scope from selected volumes
+      const scope = selectedVolumes.length === 1 ? `volume:${selectedVolumes[0]}` : 'full';
+      // Generate a timestamped filename in the user's home directory
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const ext = format === 'sqlite' ? 'db' : format;
+      const outputPath = `wincatalog_export_${ts}.${ext}`;
+      const stats = await exportApi.catalogue(format as 'sqlite' | 'json' | 'csv', scope, outputPath);
+      setResult({ success: true, message: `Export réussi : ${stats.entries_exported} entrées → ${stats.path}` });
+    } catch (e) {
+      setResult({ success: false, message: `Erreur : ${e}` });
     } finally {
       setGenerating(false);
     }
@@ -79,7 +87,7 @@ export default function ReportsDrawer({ opened, onClose }: ReportsDrawerProps) {
 
   return (
     <Drawer opened={opened} onClose={onClose} title="Générer un rapport" position="right" size="md"
-      styles={{ content: { backgroundColor: 'var(--mantine-color-dark-7)' }, header: { backgroundColor: 'var(--mantine-color-dark-7)' } }}>
+      styles={{ content: { backgroundColor: 'var(--mantine-color-body)' }, header: { backgroundColor: 'var(--mantine-color-body)' } }}>
       <ScrollArea h="calc(100vh - 80px)" type="auto">
         <Stack gap="md">
           {/* Template selection */}
@@ -91,8 +99,8 @@ export default function ReportsDrawer({ opened, onClose }: ReportsDrawerProps) {
                   onClick={() => setSelectedTemplate(t.id)}
                   style={{
                     cursor: 'pointer',
-                    borderColor: selectedTemplate === t.id ? 'var(--mantine-color-primary-6)' : 'var(--mantine-color-dark-5)',
-                    backgroundColor: selectedTemplate === t.id ? 'var(--mantine-color-primary-9)' : 'transparent',
+                    borderColor: selectedTemplate === t.id ? 'var(--mantine-color-primary-6)' : 'var(--mantine-color-default-border)',
+                    backgroundColor: selectedTemplate === t.id ? 'var(--mantine-color-primary-light)' : 'transparent',
                   }}>
                   <Group gap="sm">
                     <Text size="lg">{t.icon}</Text>
@@ -106,7 +114,7 @@ export default function ReportsDrawer({ opened, onClose }: ReportsDrawerProps) {
             </Stack>
           </div>
 
-          <Divider color="var(--mantine-color-dark-5)" />
+          <Divider color="var(--mantine-color-default-border)" />
 
           {/* Parameters */}
           <div>
@@ -125,23 +133,22 @@ export default function ReportsDrawer({ opened, onClose }: ReportsDrawerProps) {
                 size="xs"
                 label="Format d'export"
                 value={format}
-                onChange={(v) => setFormat((v as ExportFormat) ?? 'pdf')}
+                onChange={(v) => setFormat((v as ExportFormat) ?? 'json')}
                 data={[
-                  { value: 'pdf', label: '📄 PDF' },
-                  { value: 'html', label: '🌐 HTML' },
-                  { value: 'csv', label: '📊 CSV' },
-                  { value: 'json', label: '🔧 JSON' },
+                  { value: 'json', label: 'JSON' },
+                  { value: 'csv', label: 'CSV' },
+                  { value: 'sqlite', label: 'SQLite (sauvegarde)' },
                 ]}
               />
             </Stack>
           </div>
 
-          <Divider color="var(--mantine-color-dark-5)" />
+          <Divider color="var(--mantine-color-default-border)" />
 
           {/* Preview */}
           <div>
             <Text size="sm" fw={600} mb="sm">Aperçu</Text>
-            <Paper p="sm" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)' }}>
+            <Paper p="sm" withBorder style={{ borderColor: 'var(--mantine-color-default-border)' }}>
               <Text size="sm" fw={500} mb="xs">{template.icon} {template.name}</Text>
               <Text size="xs" c="dimmed" mb="sm">{selectedVolumes.length} volume{selectedVolumes.length > 1 ? 's' : ''} sélectionné{selectedVolumes.length > 1 ? 's' : ''}</Text>
               <Group gap={4}>
@@ -153,7 +160,18 @@ export default function ReportsDrawer({ opened, onClose }: ReportsDrawerProps) {
             </Paper>
           </div>
 
-          <Divider color="var(--mantine-color-dark-5)" />
+          <Divider color="var(--mantine-color-default-border)" />
+
+          {/* Result */}
+          {result && (
+            <Alert
+              color={result.success ? 'green' : 'red'}
+              icon={result.success ? <IconCheck size={16} /> : <IconAlertCircle size={16} />}
+              withCloseButton onClose={() => setResult(null)}
+            >
+              <Text size="xs">{result.message}</Text>
+            </Alert>
+          )}
 
           {/* Actions */}
           <Group gap="sm">

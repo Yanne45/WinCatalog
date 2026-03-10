@@ -78,7 +78,7 @@ function WidgetShell({
   const def = WIDGET_DEFS.find((d) => d.type === config.type);
 
   return (
-    <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-dark-5)', height: '100%' }}>
+    <Paper p="md" withBorder style={{ borderColor: 'var(--mantine-color-default-border)', height: '100%' }}>
       <Group justify="space-between" mb="sm">
         <Group gap="xs">
           <IconGripVertical size={14} style={{ color: 'var(--mantine-color-dimmed)', cursor: 'grab' }} />

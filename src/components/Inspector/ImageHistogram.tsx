@@ -70,7 +70,7 @@ export default function ImageHistogram({ seed, width = 240, height = 60 }: Image
       <Box style={{
         width, height, position: 'relative',
         borderRadius: 'var(--mantine-radius-xs)',
-        backgroundColor: 'var(--mantine-color-dark-6)',
+        backgroundColor: 'var(--mantine-color-default)',
         overflow: 'hidden',
       }}>
         {/* Red channel */}
