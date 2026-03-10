@@ -23,7 +23,7 @@ import {
 // Types
 // ============================================================================
 
-type ScanState = 'idle' | 'running' | 'paused' | 'completed' | 'error';
+type ScanState = 'idle' | 'running' | 'paused' | 'completed' | 'canceled' | 'error';
 
 interface ScanProgress {
   phase: string;
@@ -257,10 +257,28 @@ export default function ScanScreen({
       setScanState('completed');
       setStats(result);
     } catch (err) {
-      setScanState('error');
-      setErrors((prev) => [...prev, `Scan failed: ${err}`]);
+      const msg = String(err);
+      if (msg.toLowerCase().includes('scan canceled')) {
+        setScanState('canceled');
+        setErrors((prev) => [...prev.slice(-49), 'Scan annulé']);
+      } else {
+        setScanState('error');
+        setErrors((prev) => [...prev, `Scan failed: ${msg}`]);
+      }
     }
   }, [selectedVolumeId, scanMode, maxDepth, computeHash, generateThumbs]);
+
+  const cancelScan = useCallback(async () => {
+    try {
+      const canceled = await scanApi.cancel();
+      if (canceled) {
+        setScanState('canceled');
+        setErrors((prev) => [...prev.slice(-49), 'Scan annulé par utilisateur']);
+      }
+    } catch (err) {
+      setErrors((prev) => [...prev.slice(-49), `Annulation impossible: ${err}`]);
+    }
+  }, []);
 
   return (
     <Box p="lg" maw={800}>
@@ -415,6 +433,19 @@ export default function ScanScreen({
         {/* Step 3: Progress / Results */}
         <Stepper.Step label="Résultats" description={scanState === 'running' ? 'En cours…' : 'Terminé'} icon={<IconCheck size={18} />}>
           <Box mt="md">
+            {scanState === 'running' && (
+              <Group mb="md">
+                <Button
+                  color="red"
+                  variant="light"
+                  leftSection={<IconPlayerStop size={16} />}
+                  onClick={cancelScan}
+                >
+                  Annuler le scan
+                </Button>
+              </Group>
+            )}
+
             <ScanProgressView state={scanState} progress={progress} stats={stats} />
 
             {scanState === 'completed' && stats && (
@@ -442,7 +473,13 @@ export default function ScanScreen({
               </Alert>
             )}
 
-            {errors.length > 0 && scanState !== 'error' && (
+            {scanState === 'canceled' && (
+              <Alert icon={<IconPlayerStop size={18} />} color="orange" variant="light" mt="md">
+                Scan annulé.
+              </Alert>
+            )}
+
+            {errors.length > 0 && scanState !== 'error' && scanState !== 'canceled' && (
               <Paper p="sm" withBorder mt="md" style={{ borderColor: 'var(--mantine-color-default-border)', maxHeight: 200, overflow: 'auto' }}>
                 <Text size="xs" fw={600} c="dimmed" mb="xs">Erreurs ({errors.length})</Text>
                 {errors.slice(-20).map((err, i) => (

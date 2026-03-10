@@ -1,0 +1,7 @@
+[env]
+CC = "C:\\Program Files\\LLVM\\bin\\clang.exe"
+CXX = "C:\\Program Files\\LLVM\\bin\\clang++.exe"
+"CC_aarch64-pc-windows-msvc" = "C:\\Program Files\\LLVM\\bin\\clang.exe"
+"CXX_aarch64-pc-windows-msvc" = "C:\\Program Files\\LLVM\\bin\\clang++.exe"
+CC_aarch64_pc_windows_msvc = "C:\\Program Files\\LLVM\\bin\\clang.exe"
+CXX_aarch64_pc_windows_msvc = "C:\\Program Files\\LLVM\\bin\\clang++.exe"

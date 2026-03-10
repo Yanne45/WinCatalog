@@ -32,3 +32,12 @@
   outline: 2px solid var(--mantine-color-primary-4);
   outline-offset: -2px;
 }
+
+/* Subtle opacity hover for lightweight badge actions */
+.wc-fade-hover {
+  opacity: 0.6;
+  transition: opacity 100ms ease-out;
+}
+.wc-fade-hover:hover {
+  opacity: 1;
+}

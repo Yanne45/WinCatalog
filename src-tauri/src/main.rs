@@ -6,8 +6,8 @@
 
 use tauri::{Emitter, Manager};
 use wincatalog_lib::commands::{self, AppState};
-use wincatalog_lib::core::jobs::{JobRunner, JobEvent, JobEventCallback};
-use wincatalog_lib::core::volume_watcher::{self, VolumeWatcher, VolumeEvent, VolumeEventCallback};
+use wincatalog_lib::core::jobs::{JobEvent, JobEventCallback, JobRunner};
+use wincatalog_lib::core::volume_watcher::{self, VolumeEvent, VolumeEventCallback, VolumeWatcher};
 use wincatalog_lib::db::Database;
 
 fn main() {
@@ -15,30 +15,35 @@ fn main() {
 
     tauri::Builder::default()
         .setup(|app| {
-            let app_data = app.path().app_data_dir()
+            let app_data = app
+                .path()
+                .app_data_dir()
                 .expect("Failed to resolve app data dir");
-            std::fs::create_dir_all(&app_data)
-                .expect("Failed to create app data directory");
+            std::fs::create_dir_all(&app_data).expect("Failed to create app data directory");
 
             let db_path = app_data.join("catalog.db");
             log::info!("Database path: {}", db_path.display());
 
-            let database = Database::open(&db_path)
-                .expect("Failed to open database");
+            let database = Database::open(&db_path).expect("Failed to open database");
 
             // Check volume connectivity at startup
             match volume_watcher::check_all_volumes(&database) {
                 Ok((online, offline)) => {
-                    log::info!("Volumes: {} online, {} offline", online.len(), offline.len());
+                    log::info!(
+                        "Volumes: {} online, {} offline",
+                        online.len(),
+                        offline.len()
+                    );
                 }
                 Err(e) => log::warn!("Failed to check volumes: {}", e),
             }
 
             // Start background volume watcher (poll every 5s)
             let app_handle_vol = app.handle().clone();
-            let on_vol_event: Option<VolumeEventCallback> = Some(std::sync::Arc::new(move |evt: VolumeEvent| {
-                let _ = app_handle_vol.emit("volume-event", &evt);
-            }));
+            let on_vol_event: Option<VolumeEventCallback> =
+                Some(std::sync::Arc::new(move |evt: VolumeEvent| {
+                    let _ = app_handle_vol.emit("volume-event", &evt);
+                }));
             let volume_watcher = VolumeWatcher::start(
                 database.clone(),
                 std::time::Duration::from_secs(5),
@@ -47,9 +52,10 @@ fn main() {
 
             // Start background job runner
             let app_handle_job = app.handle().clone();
-            let on_job_event: Option<JobEventCallback> = Some(std::sync::Arc::new(move |evt: JobEvent| {
-                let _ = app_handle_job.emit("job-event", &evt);
-            }));
+            let on_job_event: Option<JobEventCallback> =
+                Some(std::sync::Arc::new(move |evt: JobEvent| {
+                    let _ = app_handle_job.emit("job-event", &evt);
+                }));
             let runner = JobRunner::start(database.clone(), on_job_event);
             log::info!("Job runner started");
 
@@ -58,6 +64,8 @@ fn main() {
                 job_runner: std::sync::Mutex::new(Some(runner)),
                 watchers: std::sync::Mutex::new(std::collections::HashMap::new()),
                 volume_watcher: std::sync::Mutex::new(Some(volume_watcher)),
+                scan_cancel: std::sync::Mutex::new(None),
+                hash_cancel: std::sync::Mutex::new(None),
             });
             Ok(())
         })
@@ -77,6 +85,7 @@ fn main() {
             commands::search_content,
             // Scan
             commands::start_scan,
+            commands::cancel_scan,
             // Jobs
             commands::list_active_jobs,
             commands::pause_jobs,
@@ -85,6 +94,7 @@ fn main() {
             commands::wake_job_runner,
             // Hash
             commands::start_hash,
+            commands::cancel_hash,
             // Duplicates
             commands::find_duplicates,
             commands::get_duplicate_group,
@@ -95,6 +105,7 @@ fn main() {
             commands::create_tag,
             commands::tag_entry,
             commands::get_entry_tags,
+            commands::get_entry_tags_bulk,
             // Trash
             commands::trash_entry,
             commands::list_trash,

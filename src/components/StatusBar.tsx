@@ -10,7 +10,7 @@ import {
 } from '@mantine/core';
 import { IconCircleFilled, IconPlayerPause, IconPlayerPlay } from '@tabler/icons-react';
 import {
-  jobApi, volumeApi, formatBytes,
+  jobApi, volumeApi, volumeEvents, formatBytes,
   type Job, type Volume, type JobEvent,
 } from '../api/tauri';
 
@@ -92,50 +92,72 @@ export interface StatusBarProps {
 export default function StatusBar({ contextInfo, onJobClick }: StatusBarProps) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [volumes, setVolumes] = useState<Volume[]>([]);
-  const unlistenRef = useRef<(() => void) | null>(null);
+  const unlistenJobRef = useRef<(() => void) | null>(null);
+  const unlistenVolumeRef = useRef<(() => void) | null>(null);
 
-  // Adaptive polling: 2s when jobs running, 10s when idle
+  // Adaptive polling:
+  // - Jobs: 2s when active, 15s when idle.
+  // - Volumes: 60s fallback + immediate refresh on volume events.
   useEffect(() => {
     let active = true;
-    let intervalId: ReturnType<typeof setTimeout> | null = null;
-    let hasRunningJobs = false;
+    let jobsTimer: ReturnType<typeof setTimeout> | null = null;
+    let volumeTimer: ReturnType<typeof setTimeout> | null = null;
+    let hasActiveJobs = false;
 
-    const poll = async () => {
+    const pollJobs = async () => {
       try {
-        const [j, v] = await Promise.all([jobApi.listActive(), volumeApi.list()]);
+        const j = await jobApi.listActive();
+        if (!active) return;
+        setJobs(j);
+        hasActiveJobs = j.some((job) => job.status === 'running' || job.status === 'queued');
+      } catch {
+        // ignore
+      } finally {
         if (active) {
-          setJobs(j);
-          setVolumes(v);
-          const running = j.some((job) => job.status === 'running' || job.status === 'queued');
-          if (running !== hasRunningJobs) {
-            hasRunningJobs = running;
-            schedulePoll(); // Reschedule with new interval
-          }
+          const delay = hasActiveJobs ? 2000 : 15000;
+          jobsTimer = setTimeout(pollJobs, delay);
         }
-      } catch { /* ignore */ }
+      }
     };
 
-    const schedulePoll = () => {
-      if (intervalId) clearInterval(intervalId);
-      intervalId = setInterval(poll, hasRunningJobs ? 2000 : 10000);
+    const pollVolumes = async () => {
+      try {
+        const v = await volumeApi.list();
+        if (!active) return;
+        setVolumes(v);
+      } catch {
+        // ignore
+      } finally {
+        if (active) {
+          volumeTimer = setTimeout(pollVolumes, 60000);
+        }
+      }
     };
 
-    poll();
-    schedulePoll();
+    pollJobs();
+    pollVolumes();
 
     // Also listen to job events for immediate updates
     jobApi.onEvent((evt) => {
       if (evt.type === 'Done' || evt.type === 'Failed' || evt.type === 'Started') {
-        poll(); // Refresh on state changes
+        pollJobs(); // Refresh on state changes
       }
     }).then((unlisten) => {
-      unlistenRef.current = unlisten;
+      unlistenJobRef.current = unlisten;
+    });
+
+    volumeEvents.onEvent(() => {
+      pollVolumes();
+    }).then((unlisten) => {
+      unlistenVolumeRef.current = unlisten;
     });
 
     return () => {
       active = false;
-      if (intervalId) clearInterval(intervalId);
-      unlistenRef.current?.();
+      if (jobsTimer) clearTimeout(jobsTimer);
+      if (volumeTimer) clearTimeout(volumeTimer);
+      unlistenJobRef.current?.();
+      unlistenVolumeRef.current?.();
     };
   }, []);
 

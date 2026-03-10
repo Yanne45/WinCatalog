@@ -6,7 +6,17 @@
     <title>WinCatalog</title>
     <style>
       /* Prevent flash on load — adapts to color scheme */
-      html, body { margin: 0; padding: 0; background-color: var(--mantine-color-body, #1a1b1e); }
+      html, body {
+        margin: 0;
+        padding: 0;
+        color-scheme: light dark;
+        background-color: var(--mantine-color-body, #ffffff);
+      }
+      @media (prefers-color-scheme: dark) {
+        html, body {
+          background-color: var(--mantine-color-body, #1a1b1e);
+        }
+      }
     </style>
   </head>
   <body>

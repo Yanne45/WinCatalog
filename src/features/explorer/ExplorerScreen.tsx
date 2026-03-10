@@ -228,10 +228,9 @@ function InspectorPanel({
               {unassigned.slice(0, 5).map((t) => (
                 <Badge
                   key={t.id} size="xs" variant="outline" color={t.color ?? 'gray'}
-                  style={{ cursor: 'pointer', opacity: 0.6 }}
+                  className="wc-fade-hover"
+                  style={{ cursor: 'pointer' }}
                   onClick={() => onAddTag(entry.id, t.id)}
-                  onMouseEnter={(e: React.MouseEvent) => { (e.target as HTMLElement).style.opacity = '1'; }}
-                  onMouseLeave={(e: React.MouseEvent) => { (e.target as HTMLElement).style.opacity = '0.6'; }}
                 >
                   + {t.name}
                 </Badge>
@@ -298,12 +297,22 @@ function VirtualizedList({
   onLoadMore: () => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const AUTO_LOAD_THRESHOLD_PX = 240;
   const rowVirtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 20,
   });
+
+  const handleScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    if (!hasMore || loadingMore) return;
+    const target = event.currentTarget;
+    const remaining = target.scrollHeight - target.scrollTop - target.clientHeight;
+    if (remaining <= AUTO_LOAD_THRESHOLD_PX) {
+      onLoadMore();
+    }
+  }, [hasMore, loadingMore, onLoadMore]);
 
   return (
     <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -319,7 +328,11 @@ function VirtualizedList({
       <Divider color="var(--mantine-color-default-border)" mb={2} mx="xs" />
 
       {/* Virtualized scroll container */}
-      <div ref={parentRef} style={{ flex: 1, overflow: 'auto', paddingLeft: 8, paddingRight: 8 }}>
+      <div
+        ref={parentRef}
+        onScroll={handleScroll}
+        style={{ flex: 1, overflow: 'auto', paddingLeft: 8, paddingRight: 8 }}
+      >
         <div style={{ height: rowVirtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const entry = entries[virtualRow.index];
@@ -369,6 +382,9 @@ export default function ExplorerScreen({
   const [activeVolume, setActiveVolume] = useState<Volume | null>(null);
   const [currentPath, setCurrentPath] = useState('');
   const [entries, setEntries] = useState<EntrySlim[]>([]);
+  const [fileCount, setFileCount] = useState(0);
+  const [dirCount, setDirCount] = useState(0);
+  const [totalSize, setTotalSize] = useState(0);
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -379,6 +395,7 @@ export default function ExplorerScreen({
   const [searchQuery, setSearchQuery] = useState('');
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
+  const gridViewportRef = useRef<HTMLDivElement | null>(null);
 
   // Sort state
   const [sortField, setSortField] = useState<SortField>('name');
@@ -388,6 +405,12 @@ export default function ExplorerScreen({
   const [allTags, setAllTags] = useState<TagInfo[]>([]);
   const [entryTagsMap, setEntryTagsMap] = useState<Map<number, TagInfo[]>>(new Map());
   const [filterTagId, setFilterTagId] = useState<number | null>(null);
+  const entryTagsMapRef = useRef<Map<number, TagInfo[]>>(new Map());
+  const TAG_BATCH_SIZE = 200;
+
+  useEffect(() => {
+    entryTagsMapRef.current = entryTagsMap;
+  }, [entryTagsMap]);
 
   // Load volumes
   useEffect(() => {
@@ -413,6 +436,20 @@ export default function ExplorerScreen({
     entryApi.list(activeVolume.id, currentPath, undefined, PAGE_SIZE).then((data) => {
       if (!cancelled) {
         setEntries(data);
+        let nextFiles = 0;
+        let nextDirs = 0;
+        let nextTotal = 0;
+        for (const e of data) {
+          if (e.is_dir) {
+            nextDirs += 1;
+          } else {
+            nextFiles += 1;
+            nextTotal += e.size_bytes;
+          }
+        }
+        setFileCount(nextFiles);
+        setDirCount(nextDirs);
+        setTotalSize(nextTotal);
         setHasMore(data.length >= PAGE_SIZE);
         setLoading(false);
       }
@@ -427,28 +464,115 @@ export default function ExplorerScreen({
     if (!last) return;
     setLoadingMore(true);
     try {
-      const more = await entryApi.list(activeVolume.id, currentPath, { mtime: last.mtime ?? 0, id: last.id }, PAGE_SIZE);
+      const more = await entryApi.list(
+        activeVolume.id,
+        currentPath,
+        { isDir: last.is_dir, mtime: last.mtime ?? 0, id: last.id },
+        PAGE_SIZE,
+      );
       setEntries((prev) => [...prev, ...more]);
+      if (more.length > 0) {
+        let addFiles = 0;
+        let addDirs = 0;
+        let addTotal = 0;
+        for (const e of more) {
+          if (e.is_dir) {
+            addDirs += 1;
+          } else {
+            addFiles += 1;
+            addTotal += e.size_bytes;
+          }
+        }
+        setFileCount((v) => v + addFiles);
+        setDirCount((v) => v + addDirs);
+        setTotalSize((v) => v + addTotal);
+      }
       setHasMore(more.length >= PAGE_SIZE);
     } catch { /* ignore */ }
     setLoadingMore(false);
   }, [activeVolume, currentPath, entries, loadingMore, hasMore]);
 
+  const handleGridScroll = useCallback(() => {
+    if (loading || loadingMore || !hasMore) return;
+    const viewport = gridViewportRef.current;
+    if (!viewport) return;
+    const remaining = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    if (remaining <= 240) {
+      loadMore();
+    }
+  }, [loading, loadingMore, hasMore, loadMore]);
+
   // Load tags for visible entries (batch)
   useEffect(() => {
     if (entries.length === 0) { setEntryTagsMap(new Map()); return; }
     let cancelled = false;
-    const map = new Map<number, TagInfo[]>();
-    // Load tags for first 100 entries to avoid overload
-    const toLoad = entries.slice(0, 100);
-    Promise.all(toLoad.map(async (e) => {
+
+    const loadEntryTags = async () => {
       try {
-        const tags = await tagApi.getEntryTags(e.id);
-        if (!cancelled && tags.length > 0) {
-          map.set(e.id, tags.map(([id, name, color]) => ({ id, name, color })));
+        const entryIds = entries.map((e) => e.id);
+        const prevMap = entryTagsMapRef.current;
+
+        // Keep only tags for currently loaded entries.
+        const pruned = new Map<number, TagInfo[]>();
+        for (const id of entryIds) {
+          const existing = prevMap.get(id);
+          if (existing) pruned.set(id, existing);
         }
-      } catch { /* ignore */ }
-    })).then(() => { if (!cancelled) setEntryTagsMap(new Map(map)); });
+        setEntryTagsMap(pruned);
+
+        // Load tags only for entries that are still missing.
+        const missingIds = entryIds.filter((id) => !pruned.has(id));
+        if (missingIds.length === 0) return;
+
+        const batches: number[][] = [];
+        for (let i = 0; i < missingIds.length; i += TAG_BATCH_SIZE) {
+          batches.push(missingIds.slice(i, i + TAG_BATCH_SIZE));
+        }
+
+        const batchResults = await Promise.all(
+          batches.map((batch) => tagApi.getEntryTagsBulk(batch))
+        );
+        if (cancelled) return;
+
+        const loaded = new Map<number, TagInfo[]>();
+        for (const batch of batches) {
+          for (const entryId of batch) {
+            loaded.set(entryId, []);
+          }
+        }
+        for (const rows of batchResults) {
+          for (const [entryId, tagId, name, color] of rows) {
+            const list = loaded.get(entryId);
+            const tag: TagInfo = { id: tagId, name, color };
+            if (list) {
+              list.push(tag);
+            } else {
+              loaded.set(entryId, [tag]);
+            }
+          }
+        }
+
+        setEntryTagsMap((prev) => {
+          const next = new Map(prev);
+          for (const [entryId, tags] of loaded) {
+            next.set(entryId, tags);
+          }
+          return next;
+        });
+      } catch {
+        if (!cancelled) {
+          const entryIds = entries.map((e) => e.id);
+          const fallback = new Map<number, TagInfo[]>();
+          for (const id of entryIds) {
+            const existing = entryTagsMapRef.current.get(id);
+            if (existing) fallback.set(id, existing);
+          }
+          setEntryTagsMap(fallback);
+        }
+      }
+    };
+
+    loadEntryTags();
     return () => { cancelled = true; };
   }, [entries]);
 
@@ -463,7 +587,7 @@ export default function ExplorerScreen({
       entryTagsMap.forEach((tags) => tags.forEach((t) => seen.set(t.id, t)));
       setAllTags(Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name)));
     });
-  }, [entryTagsMap]);
+  }, []);
 
   // Add tag to entry
   const handleAddTag = useCallback(async (entryId: number, tagId: number) => {
@@ -593,8 +717,6 @@ export default function ExplorerScreen({
     return result;
   }, [sortedEntries, searchQuery, ftsResultIds, filterTagId, entryTagsMap]);
 
-  const totalSize = useMemo(() => entries.filter((e) => !e.is_dir).reduce((s, e) => s + e.size_bytes, 0), [entries]);
-
   // Keyboard navigation
   const containerRef = useRef<HTMLDivElement>(null);
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -674,7 +796,7 @@ export default function ExplorerScreen({
       {/* Status bar */}
       <Box px="sm" py={3} style={{ borderBottom: '1px solid var(--mantine-color-default-border)', flexShrink: 0 }}>
         <Text size="xs" c="dimmed">
-          {entries.filter((e) => e.is_dir).length} dossiers, {entries.filter((e) => !e.is_dir).length} fichiers
+          {dirCount} dossiers, {fileCount} fichiers
           {hasMore && '+'}
           {' • '}{formatBytes(totalSize)}
           {selectedId != null && ' • 1 sélectionné'}
@@ -716,7 +838,12 @@ export default function ExplorerScreen({
             onLoadMore={loadMore}
           />
         ) : (
-          <ScrollArea style={{ flex: 1 }} type="auto">
+          <ScrollArea
+            style={{ flex: 1 }}
+            type="auto"
+            viewportRef={gridViewportRef}
+            onScrollPositionChange={handleGridScroll}
+          >
             <Group gap="xs" p="md" align="flex-start" style={{ flexWrap: 'wrap' }}>
               {filteredEntries.map((entry) => (
                 <GridCard key={entry.id} entry={entry} selected={selectedId === entry.id}

@@ -94,9 +94,13 @@ export const volumeApi = {
 };
 
 export const entryApi = {
-  list: (volumeId: number, parentPath: string, cursor?: { mtime: number; id: number }, limit = 200) =>
+  list: (volumeId: number, parentPath: string, cursor?: { isDir: boolean; mtime: number; id: number }, limit = 200) =>
     invoke<EntrySlim[]>('list_entries', {
-      volumeId, parentPath, cursorMtime: cursor?.mtime ?? null, cursorId: cursor?.id ?? null, limit,
+      volumeId, parentPath,
+      cursorIsDir: cursor?.isDir ?? null,
+      cursorMtime: cursor?.mtime ?? null,
+      cursorId: cursor?.id ?? null,
+      limit,
     }),
   get: (id: number) => invoke<Entry | null>('get_entry', { id }),
 };
@@ -114,6 +118,7 @@ export const scanApi = {
       computeHash: opts?.computeHash ?? null,
       generateThumbs: opts?.generateThumbs ?? null,
     }),
+  cancel: () => invoke<boolean>('cancel_scan'),
   onEvent: (cb: (e: ScanEvent) => void): Promise<UnlistenFn> =>
     listen<ScanEvent>('scan-event', (e) => cb(e.payload)),
 };
@@ -172,6 +177,7 @@ export interface HashEvent {
 export const hashApi = {
   start: (volumeId: number, mode: 'quick' | 'full' = 'full', minSize?: number) =>
     invoke<HashStats>('start_hash', { volumeId, mode, minSize: minSize ?? null }),
+  cancel: () => invoke<boolean>('cancel_hash'),
   onEvent: (cb: (e: HashEvent) => void): Promise<UnlistenFn> =>
     listen<HashEvent>('hash-event', (e) => cb(e.payload)),
 };
@@ -197,6 +203,8 @@ export const tagApi = {
   tagEntry: (entryId: number, tagId: number) => invoke<void>('tag_entry', { entryId, tagId }),
   untagEntry: (entryId: number, tagId: number) => invoke<void>('untag_entry', { entryId, tagId }),
   getEntryTags: (entryId: number) => invoke<[number, string, string | null][]>('get_entry_tags', { entryId }),
+  getEntryTagsBulk: (entryIds: number[]) =>
+    invoke<[number, number, string, string | null][]>('get_entry_tags_bulk', { entryIds }),
   list: () => invoke<Tag[]>('list_tags'),
   update: (id: number, name: string, color?: string) => invoke<void>('update_tag', { id, name, color: color ?? null }),
   delete: (id: number) => invoke<void>('delete_tag', { id }),

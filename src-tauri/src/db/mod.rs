@@ -6,19 +6,21 @@
 pub mod pragmas;
 pub mod queries;
 
+use std::panic::Location;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 
-use crossbeam_channel::{bounded, Sender, Receiver};
+use crossbeam_channel::{bounded, Receiver, Sender};
 use rusqlite::{Connection, OpenFlags, Transaction};
 use thiserror::Error;
 
 const SCHEMA_VERSION: i64 = 1;
 
-/// Number of read-only connections in the pool.
+/// Default number of read-only connections in the pool.
 /// Allows concurrent reads from multiple Tauri command handlers.
-const READER_POOL_SIZE: usize = 4;
+const DEFAULT_READER_POOL_SIZE: usize = 4;
+const MAX_READER_POOL_SIZE: usize = 16;
 
 #[derive(Error, Debug)]
 pub enum DbError {
@@ -51,10 +53,13 @@ impl ReaderPool {
         for _ in 0..count {
             let conn = Connection::open_with_flags(
                 path,
-                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_URI,
+                OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                    | OpenFlags::SQLITE_OPEN_URI,
             )?;
             pragmas::apply_read_only(&conn)?;
-            tx.send(conn).map_err(|_| DbError::Execution("Pool init failed".into()))?;
+            tx.send(conn)
+                .map_err(|_| DbError::Execution("Pool init failed".into()))?;
         }
         Ok(Self { tx, rx })
     }
@@ -67,16 +72,21 @@ impl ReaderPool {
                 OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
             )?;
             pragmas::apply_read_only(&conn)?;
-            tx.send(conn).map_err(|_| DbError::Execution("Pool init failed".into()))?;
+            tx.send(conn)
+                .map_err(|_| DbError::Execution("Pool init failed".into()))?;
         }
         Ok(Self { tx, rx })
     }
 
     /// Borrow a connection, run `f`, then return it to the pool.
     fn use_conn<F, T>(&self, f: F) -> DbResult<T>
-    where F: FnOnce(&Connection) -> DbResult<T>,
+    where
+        F: FnOnce(&Connection) -> DbResult<T>,
     {
-        let conn = self.rx.recv().map_err(|_| DbError::Execution("Reader pool empty".into()))?;
+        let conn = self
+            .rx
+            .recv()
+            .map_err(|_| DbError::Execution("Reader pool empty".into()))?;
         let result = f(&conn);
         // Always return the connection, even on error
         let _ = self.tx.send(conn);
@@ -109,17 +119,24 @@ impl Database {
             .spawn(move || {
                 let mut conn = match Connection::open(&writer_path) {
                     Ok(c) => c,
-                    Err(e) => { let _ = ready_tx.send(Err(format!("DB open: {}", e))); return; }
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(format!("DB open: {}", e)));
+                        return;
+                    }
                 };
                 if let Err(e) = pragmas::apply_all(&conn) {
-                    let _ = ready_tx.send(Err(format!("Pragmas: {}", e))); return;
+                    let _ = ready_tx.send(Err(format!("Pragmas: {}", e)));
+                    return;
                 }
                 if let Err(e) = run_migrations(&mut conn) {
-                    let _ = ready_tx.send(Err(format!("Migration: {}", e))); return;
+                    let _ = ready_tx.send(Err(format!("Migration: {}", e)));
+                    return;
                 }
                 log::info!("DB writer ready: {}", writer_path.display());
                 let _ = ready_tx.send(Ok(()));
-                while let Ok(task) = writer_rx.recv() { task(&mut conn); }
+                while let Ok(task) = writer_rx.recv() {
+                    task(&mut conn);
+                }
                 let _ = conn.execute_batch("PRAGMA optimize; PRAGMA wal_checkpoint(TRUNCATE);");
                 log::info!("DB writer shutdown");
             })
@@ -132,11 +149,16 @@ impl Database {
             Err(_) => return Err(DbError::WriterDisconnected),
         }
 
-        // Read-only connection pool
-        let readers = ReaderPool::new(&path, READER_POOL_SIZE)?;
-        log::info!("DB reader pool ready: {} connections", READER_POOL_SIZE);
+        // Read-only connection pool (auto-sized, overridable by env).
+        let reader_pool_size = configured_reader_pool_size();
+        let readers = ReaderPool::new(&path, reader_pool_size)?;
+        log::info!("DB reader pool ready: {} connections", reader_pool_size);
 
-        let db = Self { writer_tx, readers: Arc::new(readers), path };
+        let db = Self {
+            writer_tx,
+            readers: Arc::new(readers),
+            path,
+        };
 
         // Verify alive
         db.write(|conn| {
@@ -160,14 +182,16 @@ impl Database {
                 let mut conn = Connection::open(&uri_w).unwrap();
                 pragmas::apply_all(&conn).unwrap();
                 run_migrations(&mut conn).unwrap();
-                while let Ok(task) = writer_rx.recv() { task(&mut conn); }
+                while let Ok(task) = writer_rx.recv() {
+                    task(&mut conn);
+                }
             })
             .unwrap();
 
         // Small delay for writer to finish migrations before reader connects
         std::thread::sleep(std::time::Duration::from_millis(50));
 
-        let readers = ReaderPool::new_memory(uri, READER_POOL_SIZE)?;
+        let readers = ReaderPool::new_memory(uri, configured_reader_pool_size())?;
 
         Ok(Self {
             writer_tx,
@@ -178,31 +202,60 @@ impl Database {
 
     /// Read-only query. Borrows a connection from the pool.
     /// Multiple reads can run concurrently (up to READER_POOL_SIZE).
+    #[track_caller]
     pub fn read<F, T>(&self, f: F) -> DbResult<T>
-    where F: FnOnce(&Connection) -> DbResult<T>,
+    where
+        F: FnOnce(&Connection) -> DbResult<T>,
     {
-        self.readers.use_conn(f)
+        let loc = Location::caller();
+        self.readers.use_conn(f).map_err(|e| {
+            log::error!(
+                "DB read failed at {}:{}:{} -> {}",
+                loc.file(),
+                loc.line(),
+                loc.column(),
+                e
+            );
+            e
+        })
     }
 
     /// Single write statement on writer thread.
+    #[track_caller]
     pub fn write<F, T>(&self, f: F) -> DbResult<T>
     where
         F: FnOnce(&Connection) -> DbResult<T> + Send + 'static,
         T: Send + 'static,
     {
+        let loc = Location::caller();
         let (tx, rx) = bounded::<DbResult<T>>(1);
         self.writer_tx
-            .send(Box::new(move |conn| { let _ = tx.send(f(conn)); }))
+            .send(Box::new(move |conn| {
+                let _ = tx.send(f(conn));
+            }))
             .map_err(|_| DbError::WriterDisconnected)?;
-        rx.recv().map_err(|_| DbError::WriterDisconnected)?
+        rx.recv()
+            .map_err(|_| DbError::WriterDisconnected)?
+            .map_err(|e| {
+                log::error!(
+                    "DB write failed at {}:{}:{} -> {}",
+                    loc.file(),
+                    loc.line(),
+                    loc.column(),
+                    e
+                );
+                e
+            })
     }
 
     /// Transaction on writer thread. Commits on Ok, rolls back on Err.
+    #[track_caller]
     pub fn write_transaction<F, T>(&self, f: F) -> DbResult<T>
     where
         F: FnOnce(&Transaction<'_>) -> DbResult<T> + Send + 'static,
         T: Send + 'static,
     {
+        let loc = Location::caller();
         let (tx, rx) = bounded::<DbResult<T>>(1);
         self.writer_tx
             .send(Box::new(move |conn| {
@@ -215,39 +268,78 @@ impl Database {
                 let _ = tx.send(result);
             }))
             .map_err(|_| DbError::WriterDisconnected)?;
-        rx.recv().map_err(|_| DbError::WriterDisconnected)?
+        rx.recv()
+            .map_err(|_| DbError::WriterDisconnected)?
+            .map_err(|e| {
+                log::error!(
+                    "DB write_transaction failed at {}:{}:{} -> {}",
+                    loc.file(),
+                    loc.line(),
+                    loc.column(),
+                    e
+                );
+                e
+            })
     }
 
     /// Fire-and-forget write.
     pub fn write_async<F>(&self, f: F) -> DbResult<()>
-    where F: FnOnce(&mut Connection) + Send + 'static,
+    where
+        F: FnOnce(&mut Connection) + Send + 'static,
     {
-        self.writer_tx.send(Box::new(f)).map_err(|_| DbError::WriterDisconnected)
+        self.writer_tx
+            .send(Box::new(f))
+            .map_err(|_| DbError::WriterDisconnected)
     }
 
     pub fn optimize(&self) -> DbResult<()> {
-        self.write(|conn| { conn.execute_batch("PRAGMA optimize;")?; Ok(()) })
+        self.write(|conn| {
+            conn.execute_batch("PRAGMA optimize;")?;
+            Ok(())
+        })
     }
 
-    pub fn path(&self) -> &Path { &self.path }
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 
     pub fn file_size(&self) -> DbResult<u64> {
-        if self.path.to_str() == Some(":memory:") { return Ok(0); }
+        if self.path.to_str() == Some(":memory:") {
+            return Ok(0);
+        }
         Ok(std::fs::metadata(&self.path)?.len())
     }
 }
 
 fn run_migrations(conn: &mut Connection) -> DbResult<()> {
-    let current: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))
+    let current: i64 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(DbError::Sqlite)?;
-    if current >= SCHEMA_VERSION { return Ok(()); }
+    if current >= SCHEMA_VERSION {
+        return Ok(());
+    }
     log::info!("Migrating {} → {}", current, SCHEMA_VERSION);
     if current < 1 {
         conn.execute_batch(include_str!("migrations/001_init.sql"))
             .map_err(|e| DbError::Migration(format!("001_init: {}", e)))?;
     }
-    conn.pragma_update(None, "user_version", SCHEMA_VERSION).map_err(DbError::Sqlite)?;
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+        .map_err(DbError::Sqlite)?;
     Ok(())
+}
+
+fn configured_reader_pool_size() -> usize {
+    if let Ok(v) = std::env::var("WINCAT_DB_READERS") {
+        if let Ok(n) = v.parse::<usize>() {
+            return n.clamp(1, MAX_READER_POOL_SIZE);
+        }
+    }
+
+    let cpus = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(DEFAULT_READER_POOL_SIZE);
+    // Keep a moderate cap to avoid too many open handles while allowing concurrency.
+    cpus.clamp(DEFAULT_READER_POOL_SIZE, MAX_READER_POOL_SIZE)
 }
 
 #[cfg(test)]
@@ -261,15 +353,19 @@ mod tests {
         // Write
         db.write(|conn| {
             conn.execute(
-                "INSERT INTO locations(name, created_at) VALUES ('Test', strftime('%s','now'))", [],
+                "INSERT INTO locations(name, created_at) VALUES ('Test', strftime('%s','now'))",
+                [],
             )?;
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         // Read via reader pool
-        let count: i64 = db.read(|conn| {
-            Ok(conn.query_row("SELECT COUNT(*) FROM locations", [], |row| row.get(0))?)
-        }).unwrap();
+        let count: i64 = db
+            .read(
+                |conn| Ok(conn.query_row("SELECT COUNT(*) FROM locations", [], |row| row.get(0))?),
+            )
+            .unwrap();
         assert_eq!(count, 1);
     }
 
@@ -277,13 +373,18 @@ mod tests {
     fn test_transaction_rollback() {
         let db = Database::open_memory().unwrap();
         let _: DbResult<()> = db.write_transaction(|tx| {
-            tx.execute("INSERT INTO locations(name, created_at) VALUES ('X', 1)", [])
-                .map_err(DbError::Sqlite)?;
+            tx.execute(
+                "INSERT INTO locations(name, created_at) VALUES ('X', 1)",
+                [],
+            )
+            .map_err(DbError::Sqlite)?;
             Err(DbError::Migration("rollback".into()))
         });
-        let count: i64 = db.read(|conn| {
-            Ok(conn.query_row("SELECT COUNT(*) FROM locations", [], |row| row.get(0))?)
-        }).unwrap();
+        let count: i64 = db
+            .read(
+                |conn| Ok(conn.query_row("SELECT COUNT(*) FROM locations", [], |row| row.get(0))?),
+            )
+            .unwrap();
         assert_eq!(count, 0);
     }
 
@@ -291,22 +392,33 @@ mod tests {
     fn test_concurrent_reads() {
         let db = Database::open_memory().unwrap();
         db.write(|conn| {
-            conn.execute("INSERT INTO locations(name, created_at) VALUES ('A', 1)", [])?;
+            conn.execute(
+                "INSERT INTO locations(name, created_at) VALUES ('A', 1)",
+                [],
+            )?;
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         // Spawn multiple reader threads to verify pool works
-        let handles: Vec<_> = (0..READER_POOL_SIZE * 2).map(|_| {
-            let db = db.clone();
-            std::thread::spawn(move || {
-                db.read(|conn| {
-                    let c: i64 = conn.query_row("SELECT COUNT(*) FROM locations", [], |r| r.get(0))
-                        .map_err(DbError::Sqlite)?;
-                    assert_eq!(c, 1);
-                    Ok(())
-                }).unwrap();
+        let readers = configured_reader_pool_size();
+        let handles: Vec<_> = (0..readers * 2)
+            .map(|_| {
+                let db = db.clone();
+                std::thread::spawn(move || {
+                    db.read(|conn| {
+                        let c: i64 = conn
+                            .query_row("SELECT COUNT(*) FROM locations", [], |r| r.get(0))
+                            .map_err(DbError::Sqlite)?;
+                        assert_eq!(c, 1);
+                        Ok(())
+                    })
+                    .unwrap();
+                })
             })
-        }).collect();
-        for h in handles { h.join().unwrap(); }
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
     }
 }
